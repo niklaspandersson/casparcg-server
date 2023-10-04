@@ -82,6 +82,7 @@ const array<std::uint8_t>& mutable_frame::image_data(std::size_t index) const { 
 const array<std::int32_t>& mutable_frame::audio_data() const { return impl_->audio_data_; }
 array<std::uint8_t>&       mutable_frame::image_data(std::size_t index) { return impl_->image_data_.at(index); }
 array<std::int32_t>&       mutable_frame::audio_data() { return impl_->audio_data_; }
+void                       mutable_frame::set_audio_data(caspar::array<int32_t>&& audio) { impl_->audio_data_ = std::move(audio); }
 std::size_t                mutable_frame::width() const { return impl_->desc_.planes.at(0).width; }
 std::size_t                mutable_frame::height() const { return impl_->desc_.planes.at(0).height; }
 const frame_geometry&      mutable_frame::geometry() const { return impl_->geometry_; }

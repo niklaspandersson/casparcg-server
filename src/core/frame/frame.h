@@ -40,6 +40,7 @@ class mutable_frame final
 
     array<std::int32_t>&       audio_data();
     const array<std::int32_t>& audio_data() const;
+    void                       set_audio_data(caspar::array<int32_t>&& audio);
 
     std::size_t width() const;
 
