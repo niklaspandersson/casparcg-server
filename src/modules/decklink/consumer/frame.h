@@ -35,9 +35,9 @@
 namespace caspar { namespace decklink {
 
 BMDPixelFormat get_pixel_format(bool hdr);
-int            get_row_bytes(const core::video_format_desc& format_desc, bool hdr);
+int            get_row_bytes(BMDPixelFormat pix_fmt, int width);
 
-std::shared_ptr<void> allocate_frame_data(const core::video_format_desc& format_desc, bool hdr);
+std::shared_ptr<void> allocate_frame_data(const core::video_format_desc& format_desc, BMDPixelFormat pix_fmt);
 
 std::shared_ptr<void> convert_frame_for_port(const core::video_format_desc& channel_format_desc,
                                              const core::video_format_desc& decklink_format_desc,
