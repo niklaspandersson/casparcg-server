@@ -82,6 +82,15 @@ static com_ptr<IDeckLinkIterator> create_iterator()
     return pDecklinkIterator;
 }
 
+static com_ptr<IDeckLinkVideoConversion> create_video_converter()
+{
+    CComPtr<IDeckLinkIterator> pVideoConversion_;
+    if (FAILED(pVideoConversion_.CoCreateInstance(CLSID_CDeckLinkVideoConversion)))
+        CASPAR_THROW_EXCEPTION(not_supported() << msg_info("Could not create video converter."));
+
+    return pVideoConversion_;
+}
+
 template <typename I, typename T>
 static com_iface_ptr<I> iface_cast(const com_ptr<T>& ptr, bool optional = false)
 {
@@ -162,6 +171,16 @@ static com_ptr<IDeckLinkIterator> create_iterator()
         CASPAR_THROW_EXCEPTION(not_supported() << msg_info("Decklink drivers not found."));
 
     return wrap_raw<com_ptr>(iterator, true);
+}
+
+static com_ptr<IDeckLinkVideoConversion> create_video_converter()
+{
+    IDeckLinkVideoConversion* converter = CreateVideoConversionInstance();
+
+    if (converter == nullptr)
+        CASPAR_THROW_EXCEPTION(not_supported() << msg_info("Could not create video converter."));
+
+    return wrap_raw<com_ptr>(converter, true);
 }
 
 template <typename T>

@@ -222,6 +222,7 @@ class decklink_frame
     , public IDeckLinkVideoFrameMetadataExtensions
 {
     core::video_format_desc format_desc_;
+    BMDPixelFormat          pix_fmt_;
     std::shared_ptr<void>   data_;
     std::atomic<int>        ref_count_{0};
     int                     nb_samples_;
@@ -229,23 +230,39 @@ class decklink_frame
     core::color_space       color_space_;
     hdr_meta_configuration  hdr_metadata_;
     BMDFrameFlags           flags_;
-    BMDPixelFormat          pix_fmt_;
 
   public:
-    decklink_frame(std::shared_ptr<void>         data,
-                   core::video_format_desc       format_desc,
+    decklink_frame(core::video_format_desc       format_desc,
                    int                           nb_samples,
                    bool                          hdr,
                    core::color_space             color_space,
-                   const hdr_meta_configuration& hdr_metadata)
+                   const hdr_meta_configuration& hdr_metadata,
+                   BMDPixelFormat                pix_fmt,
+                   std::shared_ptr<void>         data)
         : format_desc_(std::move(format_desc))
+        , pix_fmt_(pix_fmt)
         , data_(std::move(data))
         , nb_samples_(nb_samples)
         , hdr_(hdr)
         , color_space_(color_space)
         , hdr_metadata_(hdr_metadata)
         , flags_(hdr ? bmdFrameFlagDefault | bmdFrameContainsHDRMetadata : bmdFrameFlagDefault)
+    {
+    }
+
+    decklink_frame(core::video_format_desc       format_desc,
+                   int                           nb_samples,
+                   bool                          hdr,
+                   core::color_space             color_space,
+                   const hdr_meta_configuration& hdr_metadata)
+        : format_desc_(std::move(format_desc))
         , pix_fmt_(get_pixel_format(hdr))
+        , data_(allocate_frame_data(format_desc, pix_fmt_))
+        , nb_samples_(nb_samples)
+        , hdr_(hdr)
+        , color_space_(color_space)
+        , hdr_metadata_(hdr_metadata)
+        , flags_(hdr ? bmdFrameFlagDefault | bmdFrameContainsHDRMetadata : bmdFrameFlagDefault)
     {
     }
 
@@ -299,9 +316,12 @@ class decklink_frame
 
     long STDMETHODCALLTYPE GetWidth() override { return static_cast<long>(format_desc_.width); }
     long STDMETHODCALLTYPE GetHeight() override { return static_cast<long>(format_desc_.height); }
-    long STDMETHODCALLTYPE GetRowBytes() override { return static_cast<long>(get_row_bytes(format_desc_, hdr_)); }
+    long STDMETHODCALLTYPE GetRowBytes() override
+    {
+        return static_cast<long>(get_row_bytes(pix_fmt_, format_desc_.width));
+    }
     BMDPixelFormat STDMETHODCALLTYPE GetPixelFormat() override { return pix_fmt_; }
-    BMDFrameFlags STDMETHODCALLTYPE  GetFlags() override { return flags_; }
+    BMDFrameFlags STDMETHODCALLTYPE GetFlags() override { return flags_; }
 
     HRESULT STDMETHODCALLTYPE GetBytes(void** buffer) override
     {
@@ -443,7 +463,7 @@ struct decklink_secondary_port final : public IDeckLinkVideoOutputCallback
     const core::video_format_desc decklink_format_desc_;
     com_ptr<IDeckLinkDisplayMode> mode_ = get_display_mode(output_,
                                                            decklink_format_desc_.format,
-                                                           get_pixel_format(config_.hdr),
+                                                           config_.hdr ? bmdFormat10BitRGBXLE : bmdFormat8BitBGRA,
                                                            bmdSupportedVideoModeDefault,
                                                            config_.hdr);
 
@@ -499,8 +519,7 @@ struct decklink_secondary_port final : public IDeckLinkVideoOutputCallback
         }
     }
 
-    [[nodiscard]] std::wstring print() const
-    {
+    [[nodiscard]] std::wstring print() const {
         return model_name_ + L" [" + std::to_wstring(output_config_.device_index) + L"|" + decklink_format_desc_.name +
                L"]";
     }
@@ -559,12 +578,14 @@ struct decklink_secondary_port final : public IDeckLinkVideoOutputCallback
 
     void schedule_next_video(std::shared_ptr<void> image_data, int nb_samples, BMDTimeValue display_time)
     {
-        auto packed_frame = wrap_raw<com_ptr, IDeckLinkVideoFrame>(new decklink_frame(std::move(image_data),
-                                                                                      decklink_format_desc_,
-                                                                                      nb_samples,
-                                                                                      config_.hdr,
-                                                                                      core::color_space::bt709,
-                                                                                      config_.hdr_meta));
+        auto packed_frame = wrap_raw<com_ptr, IDeckLinkVideoFrame>(
+            new decklink_frame(decklink_format_desc_,
+                               nb_samples,
+                               config_.hdr,
+                               core::color_space::bt709,
+                               config_.hdr_meta,
+                               config_.hdr ? bmdFormat10BitRGBXLE : bmdFormat8BitBGRA,
+                               std::move(image_data)));
         if (FAILED(output_->ScheduleVideoFrame(get_raw(packed_frame),
                                                display_time,
                                                decklink_format_desc_.duration,
@@ -576,8 +597,8 @@ struct decklink_secondary_port final : public IDeckLinkVideoOutputCallback
     }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, LPVOID*) override { return E_NOINTERFACE; }
-    ULONG STDMETHODCALLTYPE   AddRef() override { return 1; }
-    ULONG STDMETHODCALLTYPE   Release() override { return 1; }
+    ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+    ULONG STDMETHODCALLTYPE Release() override { return 1; }
 
     HRESULT STDMETHODCALLTYPE ScheduledPlaybackHasStopped() override { return S_OK; }
 
@@ -627,11 +648,13 @@ struct decklink_consumer final : public IDeckLinkVideoOutputCallback
     std::vector<std::unique_ptr<decklink_secondary_port>> secondary_port_contexts_;
     int                                                   device_sync_group_ = 0;
 
-    com_ptr<IDeckLinkDisplayMode> mode_ = get_display_mode(output_,
+    com_ptr<IDeckLinkDisplayMode>     mode_ = get_display_mode(output_,
                                                            decklink_format_desc_.format,
                                                            get_pixel_format(config_.hdr),
                                                            bmdSupportedVideoModeDefault,
                                                            config_.hdr);
+    
+    com_ptr<IDeckLinkVideoConversion> video_conversion_;
 
     std::atomic<bool> abort_request_{false};
 
@@ -648,6 +671,10 @@ struct decklink_consumer final : public IDeckLinkVideoOutputCallback
         graph_->set_color("flushed-frame", diagnostics::color(0.4f, 0.3f, 0.8f));
         graph_->set_color("buffered-audio", diagnostics::color(0.9f, 0.9f, 0.5f));
         graph_->set_color("buffered-video", diagnostics::color(0.2f, 0.9f, 0.9f));
+
+        if(config_.hdr) {
+            video_conversion_ = create_video_converter();
+        }
 
         if (config.duplex != configuration::duplex_t::default_duplex) {
             set_duplex(iface_cast<IDeckLinkAttributes_v10_11>(decklink_),
@@ -717,11 +744,12 @@ struct decklink_consumer final : public IDeckLinkVideoOutputCallback
                                     nb_samples);
             }
 
-            std::shared_ptr<void> image_data = allocate_frame_data(decklink_format_desc_, config_.hdr);
+            std::shared_ptr<void> rgb_image_data =
+                allocate_frame_data(decklink_format_desc_, config_.hdr ? bmdFormat10BitRGBXLE : bmdFormat8BitBGRA);
 
-            schedule_next_video(image_data, nb_samples, video_scheduled_, config_.hdr_meta.default_color_space);
+            schedule_next_video(rgb_image_data, nb_samples, video_scheduled_, config_.hdr_meta.default_color_space);
             for (auto& context : secondary_port_contexts_) {
-                context->schedule_next_video(image_data, 0, video_scheduled_);
+                context->schedule_next_video(rgb_image_data, 0, video_scheduled_);
             }
 
             video_scheduled_ += decklink_format_desc_.duration;
@@ -838,8 +866,8 @@ struct decklink_consumer final : public IDeckLinkVideoOutputCallback
     }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, LPVOID*) override { return E_NOINTERFACE; }
-    ULONG STDMETHODCALLTYPE   AddRef() override { return 1; }
-    ULONG STDMETHODCALLTYPE   Release() override { return 1; }
+    ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+    ULONG STDMETHODCALLTYPE Release() override { return 1; }
 
     HRESULT STDMETHODCALLTYPE ScheduledPlaybackHasStopped() override
     {
@@ -1007,10 +1035,32 @@ struct decklink_consumer final : public IDeckLinkVideoOutputCallback
                              BMDTimeValue          display_time,
                              core::color_space     color_space)
     {
-        auto fill_frame = wrap_raw<com_ptr, IDeckLinkVideoFrame>(new decklink_frame(
-            std::move(image_data), decklink_format_desc_, nb_samples, config_.hdr, color_space, config_.hdr_meta));
+        auto rgb_frame = wrap_raw<com_ptr, IDeckLinkVideoFrame>(
+            new decklink_frame(decklink_format_desc_,
+                               nb_samples,
+                               config_.hdr,
+                               color_space,
+                               config_.hdr_meta,
+                               config_.hdr ? bmdFormat10BitRGBXLE : bmdFormat8BitBGRA,
+                               std::move(image_data)));
+
+        if (config_.hdr) {
+            auto yuv_frame = wrap_raw<com_ptr, IDeckLinkVideoFrame>(
+                new decklink_frame(decklink_format_desc_, nb_samples, config_.hdr, color_space, config_.hdr_meta));
+
+            if (FAILED(video_conversion_->ConvertFrame(get_raw(rgb_frame), get_raw(yuv_frame)))) {
+                CASPAR_LOG(warning) << print() << L" Failed to convert video frame.";
+            }
+
+            if (FAILED(output_->ScheduleVideoFrame(
+                    get_raw(yuv_frame), display_time, decklink_format_desc_.duration, decklink_format_desc_.time_scale))) {
+                CASPAR_LOG(error) << print() << L" Failed to schedule primary video.";
+            }
+            return;
+        }
+
         if (FAILED(output_->ScheduleVideoFrame(
-                get_raw(fill_frame), display_time, decklink_format_desc_.duration, decklink_format_desc_.time_scale))) {
+                get_raw(rgb_frame), display_time, decklink_format_desc_.duration, decklink_format_desc_.time_scale))) {
             CASPAR_LOG(error) << print() << L" Failed to schedule primary video.";
         }
     }
@@ -1037,8 +1087,7 @@ struct decklink_consumer final : public IDeckLinkVideoOutputCallback
         return !abort_request_;
     }
 
-    [[nodiscard]] std::wstring print() const
-    {
+    [[nodiscard]] std::wstring print() const {
         std::wstringstream buffer;
 
         buffer << model_name_ << L" [" + std::to_wstring(channel_index_) << L"-"
@@ -1090,16 +1139,21 @@ struct decklink_consumer_proxy : public core::frame_consumer
         return executor_.begin_invoke([=] { return consumer_->send(field, frame); });
     }
 
-    [[nodiscard]] std::wstring print() const override
-    {
+    [[nodiscard]] std::wstring print() const override {
         return consumer_ ? consumer_->print() : L"[decklink_consumer]";
     }
 
-    [[nodiscard]] std::wstring name() const override { return L"decklink"; }
+        [[nodiscard]] std::wstring name() const override
+    {
+        return L"decklink";
+    }
 
     [[nodiscard]] int index() const override { return 300 + config_.primary.device_index; }
 
-    [[nodiscard]] bool has_synchronization_clock() const override { return true; }
+        [[nodiscard]] bool has_synchronization_clock() const override
+    {
+        return true;
+    }
 
     [[nodiscard]] core::monitor::state state() const override { return get_state_for_config(config_, format_desc_); }
 };
