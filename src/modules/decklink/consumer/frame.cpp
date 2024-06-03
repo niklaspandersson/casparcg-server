@@ -30,16 +30,26 @@
 
 namespace caspar { namespace decklink {
 
-BMDPixelFormat get_pixel_format(bool hdr) { return hdr ? bmdFormat10BitRGBXLE : bmdFormat8BitBGRA; }
-int            get_row_bytes(const core::video_format_desc& format_desc, bool hdr)
+BMDPixelFormat get_pixel_format(bool hdr) { return hdr ? bmdFormat10BitYUV : bmdFormat8BitBGRA; }
+
+int get_row_bytes(BMDPixelFormat pix_fmt, int width)
 {
-    return hdr ? ((format_desc.width + 63) / 64) * 256 : format_desc.width * 4;
+    switch (pix_fmt) {
+        case bmdFormat10BitYUV:
+            return ((width + 47) / 48) * 128;
+        case bmdFormat10BitRGBXLE:
+            return ((width + 63) / 64) * 256;
+        default:
+            break;
+    }
+
+    return width * 4;
 }
 
-std::shared_ptr<void> allocate_frame_data(const core::video_format_desc& format_desc, bool hdr)
+std::shared_ptr<void> allocate_frame_data(const core::video_format_desc& format_desc, BMDPixelFormat pix_fmt)
 {
-    auto alignment = hdr ? 256 : 64;
-    auto size      = hdr ? get_row_bytes(format_desc, hdr) * format_desc.height : format_desc.size;
+    auto alignment = 256;
+    auto size      = get_row_bytes(pix_fmt, format_desc.width) * format_desc.height;
     return create_aligned_buffer(size, alignment);
 }
 
@@ -74,7 +84,7 @@ void convert_frame(const core::video_format_desc& channel_format_desc,
             // Pack eight byte R16G16B16A16 pixels as four byte 10bit RGB R10G10B10XX
             const int NUM_THREADS     = 4;
             auto      rows_per_thread = decklink_format_desc.height / NUM_THREADS;
-            size_t    byte_count_line = get_row_bytes(decklink_format_desc, hdr);
+            size_t    byte_count_line = get_row_bytes(bmdFormat10BitRGBXLE, decklink_format_desc.width);
             tbb::parallel_for(0, NUM_THREADS, [&](int i) {
                 auto end = (i + 1) * rows_per_thread;
                 for (int y = firstLine + i * rows_per_thread; y < end; y += decklink_format_desc.field_count) {
@@ -82,9 +92,12 @@ void convert_frame(const core::video_format_desc& channel_format_desc,
                     for (int x = 0; x < decklink_format_desc.width; x += 1) {
                         auto src = reinterpret_cast<const uint16_t*>(
                             frame.image_data(0).data() + (long long)y * decklink_format_desc.width * 8 + x * 8);
-                        uint16_t blue  = src[0] >> 6;
-                        uint16_t green = src[1] >> 6;
-                        uint16_t red   = src[2] >> 6;
+
+                        // Scale down to 10 bit and convert to video range to get a valid
+                        // v210 value after the decklink conversion
+                        uint32_t blue  = (src[0] >> 6) * 876 / 1024 + 64;
+                        uint32_t green = (src[1] >> 6) * 876 / 1024 + 64;
+                        uint32_t red   = (src[2] >> 6) * 876 / 1024 + 64;
                         dest[x]        = ((uint32_t)(red) << 22) + ((uint32_t)(green) << 12) + ((uint32_t)(blue) << 2);
                     }
                 }
@@ -175,7 +188,8 @@ std::shared_ptr<void> convert_frame_for_port(const core::video_format_desc& chan
                                              BMDFieldDominance              field_dominance,
                                              bool                           hdr)
 {
-        std::shared_ptr<void> image_data = allocate_frame_data(decklink_format_desc, hdr);
+    std::shared_ptr<void> image_data =
+        allocate_frame_data(decklink_format_desc, hdr ? bmdFormat10BitRGBXLE : bmdFormat8BitBGRA);
 
     if (field_dominance != bmdProgressiveFrame) {
         convert_frame(channel_format_desc,
