@@ -46,6 +46,25 @@ int get_row_bytes(BMDPixelFormat pix_fmt, int width)
     return width * 4;
 }
 
+inline unsigned int pack_pixel(__m128i pixel) {
+    // Scale down to 10 bit and convert to video range to get a valid
+    // v210 value after the decklink conversion
+    // formula: scaled_channel = (src >> 6) * 876 / 1024 + 64;
+
+    __m128i bit32 = _mm_unpacklo_epi16(pixel, _mm_setzero_si128()); // unpack 16 bit components to 32 bit
+    __m128i bit10 = _mm_srli_epi32(bit32, 6);         // shift down to 10 bit precision
+    bit10         = _mm_mullo_epi32(bit10, _mm_set1_epi32(876));    // multiply by 876
+    bit10         = _mm_srli_epi32(bit10, 10);        // divide by 1024
+    bit10         = _mm_add_epi32(bit10, _mm_set1_epi32(64));       // add 64
+
+    // Extract the 10 bit components and save to dest
+    uint32_t blue  = _mm_extract_epi32(bit10, 0);
+    uint32_t green = _mm_extract_epi32(bit10, 1);
+    uint32_t red   = _mm_extract_epi32(bit10, 2);
+
+    return (red << 22) + (green << 12) + (blue << 2);
+}
+
 std::shared_ptr<void> allocate_frame_data(const core::video_format_desc& format_desc, BMDPixelFormat pix_fmt)
 {
     auto alignment = 256;
@@ -82,23 +101,26 @@ void convert_frame(const core::video_format_desc& channel_format_desc,
 
         if (hdr) {
             // Pack eight byte R16G16B16A16 pixels as four byte 10bit RGB R10G10B10XX
-            const int NUM_THREADS     = 4;
+            const int NUM_THREADS     = 8;
             auto      rows_per_thread = decklink_format_desc.height / NUM_THREADS;
             size_t    byte_count_line = get_row_bytes(bmdFormat10BitRGBXLE, decklink_format_desc.width);
             tbb::parallel_for(0, NUM_THREADS, [&](int i) {
                 auto end = (i + 1) * rows_per_thread;
                 for (int y = firstLine + i * rows_per_thread; y < end; y += decklink_format_desc.field_count) {
                     auto dest = reinterpret_cast<uint32_t*>(image_data.get()) + (long long)y * byte_count_line / 4;
-                    for (int x = 0; x < decklink_format_desc.width; x += 1) {
+                    __m128i zero = _mm_setzero_si128();
+                    __m128i fac = _mm_set1_epi32(876);
+                    __m128i offset = _mm_set1_epi32(64);
+
+                    for (int x = 0; x < decklink_format_desc.width; x += 2) {
                         auto src = reinterpret_cast<const uint16_t*>(
                             frame.image_data(0).data() + (long long)y * decklink_format_desc.width * 8 + x * 8);
 
-                        // Scale down to 10 bit and convert to video range to get a valid
-                        // v210 value after the decklink conversion
-                        uint32_t blue  = (src[0] >> 6) * 876 / 1024 + 64;
-                        uint32_t green = (src[1] >> 6) * 876 / 1024 + 64;
-                        uint32_t red   = (src[2] >> 6) * 876 / 1024 + 64;
-                        dest[x]        = ((uint32_t)(red) << 22) + ((uint32_t)(green) << 12) + ((uint32_t)(blue) << 2);
+                        // SIMD optimized
+                        // Load two pixels at once to stay on 16-byte aligned memory
+                        __m128i pixels = _mm_load_si128(reinterpret_cast<const __m128i*>(src));
+                        dest[x]        = pack_pixel(_mm_unpacklo_epi64(pixels, zero));
+                        dest[x + 1]    = pack_pixel(_mm_unpackhi_epi64(pixels, zero));
                     }
                 }
             });
