@@ -46,25 +46,6 @@ int get_row_bytes(BMDPixelFormat pix_fmt, int width)
     return width * 4;
 }
 
-inline unsigned int pack_pixel(__m128i pixel) {
-    // Scale down to 10 bit and convert to video range to get a valid
-    // v210 value after the decklink conversion
-    // formula: scaled_channel = (src >> 6) * 876 / 1024 + 64;
-
-    __m128i bit32 = _mm_unpacklo_epi16(pixel, _mm_setzero_si128()); // unpack 16 bit components to 32 bit
-    __m128i bit10 = _mm_srli_epi32(bit32, 6);         // shift down to 10 bit precision
-    bit10         = _mm_mullo_epi32(bit10, _mm_set1_epi32(876));    // multiply by 876
-    bit10         = _mm_srli_epi32(bit10, 10);        // divide by 1024
-    bit10         = _mm_add_epi32(bit10, _mm_set1_epi32(64));       // add 64
-
-    // Extract the 10 bit components and save to dest
-    uint32_t blue  = _mm_extract_epi32(bit10, 0);
-    uint32_t green = _mm_extract_epi32(bit10, 1);
-    uint32_t red   = _mm_extract_epi32(bit10, 2);
-
-    return (red << 22) + (green << 12) + (blue << 2);
-}
-
 std::shared_ptr<void> allocate_frame_data(const core::video_format_desc& format_desc, BMDPixelFormat pix_fmt)
 {
     auto alignment = 256;
@@ -105,22 +86,56 @@ void convert_frame(const core::video_format_desc& channel_format_desc,
             auto      rows_per_thread = decklink_format_desc.height / NUM_THREADS;
             size_t    byte_count_line = get_row_bytes(bmdFormat10BitRGBXLE, decklink_format_desc.width);
             tbb::parallel_for(0, NUM_THREADS, [&](int i) {
-                auto end = (i + 1) * rows_per_thread;
+                auto    end    = (i + 1) * rows_per_thread;
+                __m256i zero   = _mm256_setzero_si256();
+                __m256i fac    = _mm256_set1_epi32(876);
+                __m256i offset = _mm256_set1_epi32(64);
                 for (int y = firstLine + i * rows_per_thread; y < end; y += decklink_format_desc.field_count) {
                     auto dest = reinterpret_cast<uint32_t*>(image_data.get()) + (long long)y * byte_count_line / 4;
-                    __m128i zero = _mm_setzero_si128();
-                    __m128i fac = _mm_set1_epi32(876);
-                    __m128i offset = _mm_set1_epi32(64);
 
-                    for (int x = 0; x < decklink_format_desc.width; x += 2) {
+                    for (int x = 0; x < decklink_format_desc.width; x += 4) {
                         auto src = reinterpret_cast<const uint16_t*>(
                             frame.image_data(0).data() + (long long)y * decklink_format_desc.width * 8 + x * 8);
 
                         // SIMD optimized
-                        // Load two pixels at once to stay on 16-byte aligned memory
-                        __m128i pixels = _mm_load_si128(reinterpret_cast<const __m128i*>(src));
-                        dest[x]        = pack_pixel(_mm_unpacklo_epi64(pixels, zero));
-                        dest[x + 1]    = pack_pixel(_mm_unpackhi_epi64(pixels, zero));
+                        // Load four pixels at once (16x4 = 64, 64 x 4 = 256 bytes)
+                        __m256i pixels = _mm256_load_si256(reinterpret_cast<const __m256i*>(src));
+
+                        __m256i pixel13 = _mm256_unpacklo_epi16(pixels, zero);
+                        __m256i pixel24 = _mm256_unpackhi_epi16(pixels, zero);
+
+                        pixel13 = _mm256_srli_epi32(pixel13, 6); // shift down to 10 bit precision
+                        pixel24 = _mm256_srli_epi32(pixel24, 6); // shift down to 10 bit precision
+
+                        pixel13 = _mm256_mullo_epi32(pixel13, fac); // multiply by 876
+                        pixel24 = _mm256_mullo_epi32(pixel24, fac); // multiply by 876
+
+                        pixel13 = _mm256_srli_epi32(pixel13, 10); // divide by 1024
+                        pixel24 = _mm256_srli_epi32(pixel24, 10); // divide by 1024
+
+                        pixel13 = _mm256_add_epi32(pixel13, offset); // add 64
+                        pixel24 = _mm256_add_epi32(pixel24, offset); // add 64
+
+                        // extract the R, G and B components
+                        __m256i blue_green = _mm256_unpacklo_epi32(pixel13, pixel24);
+                        __m256i red_alpha  = _mm256_unpackhi_epi32(pixel13, pixel24);
+                        __m128i bg_low     = _mm256_extracti128_si256(blue_green, 0);
+                        __m128i bg_high    = _mm256_extracti128_si256(blue_green, 1);
+                        __m128i blue       = _mm_unpacklo_epi64(bg_low, bg_high);
+                        __m128i green      = _mm_unpackhi_epi64(bg_low, bg_high);
+                        __m128i red        = _mm_unpacklo_epi64(_mm256_extracti128_si256(red_alpha, 0),
+                                                         _mm256_extracti128_si256(red_alpha, 1));
+
+                        // shift each component to their correct position in R10G10B10XX
+                        red   = _mm_slli_epi32(red, 22);
+                        green = _mm_slli_epi32(green, 12);
+                        blue  = _mm_slli_epi32(blue, 2);
+
+                        // combine the components
+                        __m128i result = _mm_add_epi32(_mm_add_epi32(red, green), blue);
+
+                        // store all four pixels at once
+                        _mm_store_si128(reinterpret_cast<__m128i*>(&dest[x]), result);
                     }
                 }
             });
