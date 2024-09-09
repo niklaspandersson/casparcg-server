@@ -128,10 +128,10 @@ void convert_frame(const core::video_format_desc& channel_format_desc,
 
                 __m256i zero     = _mm256_setzero_si256();
                 __m256i y_offset = _mm256_set1_epi32(64 << 20);
-                __m256i c_offset = _mm256_set1_epi32(512 << 20);
+                __m256i c_offset = _mm256_set1_epi32(1025 << 19);
                 __m128i yc_ctmp = _mm_set_epi32(0, color_matrix[2], color_matrix[1], color_matrix[0]);
-                __m128i cb_ctmp = _mm_set_epi32(0, color_matrix[5], color_matrix[4], color_matrix[3]);
-                __m128i cr_ctmp = _mm_set_epi32(0, color_matrix[8], color_matrix[7], color_matrix[6]);
+                __m128i cb_ctmp = _mm_set_epi32(0, color_matrix[8], color_matrix[7], color_matrix[6]);
+                __m128i cr_ctmp = _mm_set_epi32(0, color_matrix[5], color_matrix[4], color_matrix[3]);
 
                 __m256i y_coeff  = _mm256_set_m128i(yc_ctmp, yc_ctmp);
                 __m256i cb_coeff = _mm256_set_m128i(cb_ctmp, cb_ctmp);
@@ -151,18 +151,18 @@ void convert_frame(const core::video_format_desc& channel_format_desc,
                         __m256i luma[6];
                         __m256i chroma[6];
 
-                        for (int i = 0; i < 6; i++) {
-                            __m256i p0123 = _mm256_load_si256(pixeldata + i * 2);
-                            __m256i p4567 = _mm256_load_si256(pixeldata + i * 2 + 1);
+                        for (int p = 0; p < 6; p++) {
+                            __m256i p0123 = _mm256_load_si256(pixeldata + p * 2);
+                            __m256i p4567 = _mm256_load_si256(pixeldata + p * 2 + 1);
 
                             // shift down to 10 bit precision
-                            p0123 = _mm256_srli_epi16(p0123, 6);
+                            p0123 = _mm256_srli_epi16(p0123, 6);    //r0 g0 b0 a0 r1 g1 b1 a1 r2 g2 b2 a2 r3 g3 b3 a3
                             p4567 = _mm256_srli_epi16(p4567, 6);
 
                             // unpack 16 bit values to 32 bit registers, padding with zeros
                             __m256i pixel_pairs[4];
-                            pixel_pairs[0] = _mm256_unpacklo_epi16(p0123, zero); // pixels 0 2
-                            pixel_pairs[1] = _mm256_unpackhi_epi16(p0123, zero); // pixels 1 3
+                            pixel_pairs[0] = _mm256_unpacklo_epi16(p0123, zero); // pixels 0 2  //r0 0 g0 0 b0 0 a0 0 r2 0 g2 0 b2 0 a2 0
+                            pixel_pairs[1] = _mm256_unpackhi_epi16(p0123, zero); // pixels 1 3  //r1 0 g1 0 b1 0 a1 0 r3 0 g3 0 b3 0 a3 0
                             pixel_pairs[2] = _mm256_unpacklo_epi16(p4567, zero); // pixels 4 6
                             pixel_pairs[3] = _mm256_unpackhi_epi16(p4567, zero); // pixels 5 7
 
@@ -170,15 +170,16 @@ void convert_frame(const core::video_format_desc& channel_format_desc,
                             {
                                 // Multiply by y-coefficients
                                 __m256i y4[4];
-                                for (int i = 0; i < 4; i++) {
-                                    y4[i] = _mm256_mullo_epi32(pixel_pairs[i], y_coeff);
+                                for (int m = 0; m < 4; m++) {
+                                    y4[m] = _mm256_mullo_epi32(pixel_pairs[m], y_coeff);
                                 }
 
                                 // sum products
                                 __m256i y2_sum0123    = _mm256_hadd_epi32(y4[0], y4[1]);
                                 __m256i y2_sum4567    = _mm256_hadd_epi32(y4[2], y4[3]);
                                 __m256i y_sum01452367 = _mm256_hadd_epi32(y2_sum0123, y2_sum4567);
-                                luma[i]               = _mm256_srli_epi32(_mm256_add_epi32(y_sum01452367, y_offset),
+                                auto    sum           = _mm256_add_epi32(y_sum01452367, y_offset);
+                                luma[p]               = _mm256_srli_epi32(sum,
                                                             20); // add offset and shift down to 10 bit precision
                             }
 
@@ -186,17 +187,20 @@ void convert_frame(const core::video_format_desc& channel_format_desc,
                             {
                                 // Multiply by cb-coefficients
                                 __m256i cbcr4[4]; // 0 = cb02, 1 = cr02, 2 = cb46, 3 = cr46
-                                for (int i = 0; i < 2; i++) {
-                                    cbcr4[i * 2]     = _mm256_mullo_epi32(pixel_pairs[i * 2], cb_coeff);
-                                    cbcr4[i * 2 + 1] = _mm256_mullo_epi32(pixel_pairs[i * 2], cr_coeff);
+                                for (int m = 0; m < 2; m++) {
+                                    cbcr4[m * 2]     = _mm256_mullo_epi32(pixel_pairs[m * 2], cb_coeff);
+                                    cbcr4[m * 2 + 1] = _mm256_mullo_epi32(pixel_pairs[m * 2], cr_coeff);
                                 }
-
+                                //for (int m = 0; m < 2; m++) {
+                                //    cbcr4[m * 2]     = _mm256_sign_epi32(cbcr4[m * 2], cb_coeff);
+                                //    cbcr4[m * 2 + 1] = _mm256_sign_epi32(cbcr4[m * 2 + 1], cr_coeff);
+                                //}
                                 // sum products
-                                __m256i cb_sum0426    = _mm256_hadd_epi32(cbcr4[0], cbcr4[2]);
-                                __m256i cr_sum0426    = _mm256_hadd_epi32(cbcr4[1], cbcr4[3]);
-                                __m256i cbcr_sum_0426 = _mm256_hadd_epi32(cb_sum0426, cr_sum0426);
-                                chroma[i]             = _mm256_srli_epi32(_mm256_add_epi32(cbcr_sum_0426, c_offset),
-                                                              20); // add offset and shift down to 10 bit precision
+                                __m256i cbcr_02    = _mm256_hadd_epi32(cbcr4[0], cbcr4[1]);
+                                __m256i cbcr_46    = _mm256_hadd_epi32(cbcr4[2], cbcr4[3]);
+                                __m256i cbcr_sum_0426 = _mm256_hadd_epi32(cbcr_02, cbcr_46);
+                                auto    sum           = _mm256_add_epi32(cbcr_sum_0426, c_offset);  // add offset 
+                                chroma[p]             = _mm256_srli_epi32(sum, 20); // and shift down to 10 bit precision
                             }
                         }
 
@@ -208,17 +212,17 @@ void convert_frame(const core::video_format_desc& channel_format_desc,
                         __m256i luma_16bit[3];
                         __m256i chroma_16bit[3];
                         __m256i offsets = _mm256_set_epi32(7, 3, 6, 2, 5, 1, 4, 0);// (0, 4, 1, 5, 2, 6, 3, 7);
-                        for (int i = 0; i < 3; i++) {
+                        for (int m = 0; m < 3; m++) {
                             auto y16 =
-                                _mm256_packus_epi32(luma[i * 2], luma[i * 2 + 1]); // layout 0 1   4 5   8 9   12 13   2
+                                _mm256_packus_epi32(luma[m * 2], luma[m * 2 + 1]); // layout 0 1   4 5   8 9   12 13   2
                                                                                    // 3   6 7   10 11   14 15
-                            auto cbcr16 = _mm256_packus_epi32(chroma[i * 2],
-                                                                  chroma[i * 2 + 1]); // cbcr0 cbcr4 cbcr8 cbcr12
+                            auto cbcr16 = _mm256_packus_epi32(chroma[m * 2],
+                                                                  chroma[m * 2 + 1]); // cbcr0 cbcr4 cbcr8 cbcr12
                                                                                       // cbcr2 cbcr6 cbcr10 cbcr14
-                            luma_16bit[i] = _mm256_permutevar8x32_epi32(
+                            luma_16bit[m] = _mm256_permutevar8x32_epi32(
                                 y16,
                                 offsets); // layout 0 1   2 3   4 5   6 7   8 9   10 11   12 13   14 15
-                            chroma_16bit[i] = _mm256_permutevar8x32_epi32(
+                            chroma_16bit[m] = _mm256_permutevar8x32_epi32(
                                 cbcr16,
                                 offsets); // cbcr0 cbcr2 cbcr4 cbcr6   cbcr8 cbcr10 cbcr12 cbcr14
                         }
@@ -228,11 +232,11 @@ void convert_frame(const core::video_format_desc& channel_format_desc,
 
                         uint16_t* luma_ptr   = reinterpret_cast<uint16_t*>(luma_16bit);
                         uint16_t* chroma_ptr = reinterpret_cast<uint16_t*>(chroma_16bit);
-                        for (int i = 0; i < 8; ++i) {
-                            __m128i  luma      = _mm_loadu_si128(reinterpret_cast<__m128i*>(luma_ptr));
-                            __m128i  chroma    = _mm_loadu_si128(reinterpret_cast<__m128i*>(chroma_ptr));
-                            __m128i luma_packed   = _mm_mullo_epi16(luma, luma_mult);
-                            __m128i chroma_packed = _mm_mullo_epi16(chroma, chroma_mult);
+                        for (int m = 0; m < 8; ++m) {
+                            __m128i  l      = _mm_loadu_si128(reinterpret_cast<__m128i*>(luma_ptr));
+                            __m128i  c    = _mm_loadu_si128(reinterpret_cast<__m128i*>(chroma_ptr));
+                            __m128i luma_packed   = _mm_mullo_epi16(l, luma_mult);
+                            __m128i chroma_packed = _mm_mullo_epi16(c, chroma_mult);
 
                             luma_packed   = _mm_shuffle_epi8(luma_packed, luma_shuf);
                             chroma_packed = _mm_shuffle_epi8(chroma_packed, chroma_shuf);
