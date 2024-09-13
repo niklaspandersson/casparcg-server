@@ -3,7 +3,7 @@ project (decklink)
 
 set(SOURCES
 		consumer/decklink_consumer.cpp
-		consumer/frame_factory_hdr_rgbxle.cpp
+		consumer/frame_factory_hdr_v210.cpp
 		consumer/frame_factory_sdr_bgra.cpp
 		consumer/config.cpp
 		consumer/monitor.cpp
@@ -14,7 +14,7 @@ set(SOURCES
 )
 set(HEADERS
 		consumer/decklink_consumer.h
-		consumer/frame_factory_hdr_rgbxle.h
+		consumer/frame_factory_hdr_v210.h
 		consumer/frame_factory_sdr_bgra.h
 		consumer/frame_factory.h
 		consumer/config.h
