@@ -66,6 +66,13 @@
 
 namespace caspar { namespace html {
 
+inline std::int_least64_t now()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::high_resolution_clock::now().time_since_epoch())
+        .count();
+}
+
 struct presentation_frame
 {
     core::mutable_frame frame;
@@ -104,18 +111,13 @@ struct presentation_frame
 
     ~presentation_frame() {}
 
-    void set_audio(caspar::array<int32_t>&& data, int64_t pts)
-    {
-        frame.set_audio_data(std::move(data));
-        audio_pts = pts;
-    }
     void set_video(core::mutable_frame&& data)
     {
-        auto audio = std::move(frame.audio_data());
+        caspar::array<int32_t> audio(std::move(frame.audio_data()));
         frame      = std::move(data);
-        set_audio(std::move(audio), audio_pts);
+        frame.set_audio_data(std::move(audio));
     }
-    bool has_audio() const { return audio_pts != 0; }
+    bool has_audio() const { return frame.audio_data().size() > 0; }
     bool has_video() const { return frame.pixel_format_desc().format != core::pixel_format::invalid; }
     bool is_empty() const { return !has_audio() && !has_video(); }
 };
@@ -171,15 +173,15 @@ class html_client
     std::unique_ptr<ffmpeg::AudioResampler> audioResampler_;
     std::shared_ptr<video_frame_data>       last_video_frame_;
 
-    spl::shared_ptr<core::frame_factory>                        frame_factory_;
-    core::video_format_desc                                     format_desc_;
-    bool                                                        gpu_enabled_;
-    tbb::concurrent_queue<std::wstring>                         javascript_before_load_;
-    std::atomic<bool>                                           loaded_;
-    std::queue<std::pair<std::int_least64_t, presentation_frame>> frames_;
-    mutable std::mutex                                          frames_mutex_;
-    const size_t                                                frames_max_size_ = 4;
-    std::atomic<bool>                                           closing_;
+    spl::shared_ptr<core::frame_factory> frame_factory_;
+    core::video_format_desc              format_desc_;
+    bool                                 gpu_enabled_;
+    tbb::concurrent_queue<std::wstring>  javascript_before_load_;
+    std::atomic<bool>                    loaded_;
+    std::queue<presentation_frame>       frames_;
+    mutable std::mutex                   frames_mutex_;
+    const size_t                         frames_max_size_ = 4;
+    std::atomic<bool>                    closing_;
 
     core::draw_frame   last_frame_;
     std::int_least64_t last_frame_time_;
@@ -240,32 +242,8 @@ class html_client
         std::lock_guard<std::mutex> lock(frames_mutex_);
 
         if (!frames_.empty()) {
-            /*
-             * CEF in gpu-enabled mode only sends frames when something changes, and interlaced channels
-             * consume two frames in a short time span.
-             * This can interact poorly and cause the second
-             * field of an animation repeat the first.
-             * If there is a single field in the buffer, it may
-             * want delaying to avoid this stutter.
-             * The hazard here is that sometimes animations will
-             * start a field later than intended.
-             */
-            if (field == core::video_field::a && frames_.size() == 1) {
-                auto now_time = now();
-
-                // Make sure there has been a gap before this pop, of at least a couple of frames
-                auto follows_gap_in_frames = (now_time - last_frame_time_) > 100;
-
-                // Check if the sole buffered frame is too young to have a partner field generated (with a tolerance)
-                auto time_per_frame           = (1000 * 1.5) / format_desc_.fps;
-                auto front_frame_is_too_young = (now_time - frames_.front().first) < time_per_frame;
-
-                if (follows_gap_in_frames && front_frame_is_too_young) {
-                    return false;
-                }
-            }
-
-            last_frame_time_ = frames_.front().first;
+            // last_frame_time_ = frames_.front();
+            last_frame_ = core::draw_frame(std::move(frames_.front().frame));
             frames_.pop();
 
             graph_->set_value("buffered-frames", (double)frames_.size() / frames_max_size_);
@@ -387,13 +365,13 @@ class html_client
         {
             std::lock_guard<std::mutex> lock(frames_mutex_);
             last_video_frame_ = frame_data;
-            if (!frames_.empty() && !frames_.back().second.has_video()) {
-                frames_.back().second.set_video(std::move(frame));
+            if (!frames_.empty() && !frames_.back().has_video()) {
+                frames_.back().set_video(std::move(frame));
             } else {
-                frames_.push(std::make_pair(now(), presentation_frame(std::move(frame))));
+                frames_.push(presentation_frame(std::move(frame)));
             }
 
-            while (frames_.size() > 8) {
+            while (frames_.size() > frames_max_size_) {
                 frames_.pop();
                 graph_->set_tag(diagnostics::tag_severity::WARNING, "dropped-frame");
             }
@@ -469,7 +447,7 @@ class html_client
 
             {
                 std::lock_guard<std::mutex> lock(frames_mutex_);
-                frames_.push(std::make_pair(now(), presentation_frame()));
+                frames_.push(presentation_frame());
             }
 
             {
@@ -506,22 +484,28 @@ class html_client
     {
         if (audioResampler_) {
             auto audio = audioResampler_->convert(frames, reinterpret_cast<const void**>(data));
+            try
             {
                 std::lock_guard<std::mutex> lock(frames_mutex_);
                 if (frames_.empty()) {
                     if (last_video_frame_) {
-                        frames_.push(std::make_pair(now(), presentation_frame(create_filled_frame(*last_video_frame_))));
-                    } else
-                        frames_.push(std::make_pair(now(), presentation_frame()));
+                         frames_.push(presentation_frame(create_filled_frame(*last_video_frame_)));
+                    } else {
+                        frames_.push(presentation_frame());
+                    }
                 }
 
-                if (!frames_.back().second.has_audio()) {
-                    frames_.back().second.set_audio(std::move(audio), pts);
+                if (!frames_.back().has_audio()) {
+                    // frames_.back().frame.set_audio_data(std::move(audio));
                 } else {
-                    auto frame = presentation_frame(create_filled_frame(*last_video_frame_));
-                    frame.set_audio(std::move(audio), pts);
-                    frames_.push(std::make_pair(now(), std::move(frame)));
+                    presentation_frame frame(create_filled_frame(*last_video_frame_));
+                    CASPAR_LOG(info) << "[html_producer] Frame with audio already queued, copying last video frame and queueing another";
+                    frame.frame.set_audio_data(std::move(audio));
+                    frames_.push(std::move(frame));
                 }
+            }
+            catch(...) {
+                CASPAR_LOG(info) << "[html_producer] Exception in OnAudioStreamPacket";
             }
         }
     }
