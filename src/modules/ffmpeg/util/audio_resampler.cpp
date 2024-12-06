@@ -8,20 +8,22 @@ extern "C" {
 
 namespace caspar::ffmpeg {
 
-AudioResampler::AudioResampler(int64_t sample_rate, AVSampleFormat in_sample_fmt)
-    : ctx(std::shared_ptr<SwrContext>(swr_alloc_set_opts(nullptr,
-                                                         AV_CH_LAYOUT_7POINT1,
-                                                         AV_SAMPLE_FMT_S32,
-                                                         sample_rate,
-                                                         AV_CH_LAYOUT_7POINT1,
-                                                         in_sample_fmt,
-                                                         sample_rate,
-                                                         0,
-                                                         nullptr),
-                                      [](SwrContext* ptr) { swr_free(&ptr); }))
+AudioResampler::AudioResampler(int sample_rate, AVSampleFormat in_sample_fmt)
 {
-    if (!ctx)
-        FF_RET(AVERROR(ENOMEM), "swr_alloc_set_opts");
+    AVChannelLayout channel_layout = AV_CHANNEL_LAYOUT_7POINT1;
+    
+    SwrContext* raw_ctx = nullptr;
+    FF(swr_alloc_set_opts2(&raw_ctx,
+                           &channel_layout,
+                           AV_SAMPLE_FMT_S32,
+                           sample_rate,
+                           &channel_layout,
+                           in_sample_fmt,
+                           sample_rate,
+                           0,
+                           nullptr));
+
+    ctx = std::shared_ptr<SwrContext>(raw_ctx, [](SwrContext* ptr) { swr_free(&ptr); });
 
     FF_RET(swr_init(ctx.get()), "swr_init");
 }
