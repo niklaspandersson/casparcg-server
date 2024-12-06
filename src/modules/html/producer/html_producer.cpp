@@ -76,14 +76,14 @@ inline std::int_least64_t now()
 struct presentation_frame
 {
     std::int_least64_t timestamp;
-    core::draw_frame   frame     = core::draw_frame::empty();
+    core::draw_frame   frame    = core::draw_frame::empty();
     bool               is_empty = true;
 
     explicit presentation_frame(core::draw_frame video = {}, std::int_least64_t ts = now())
     {
         timestamp = ts;
         if (video) {
-            frame     = std::move(video);
+            frame    = std::move(video);
             is_empty = false;
         }
     }
@@ -91,7 +91,9 @@ struct presentation_frame
     presentation_frame(presentation_frame&& other) noexcept
         : timestamp(other.timestamp)
         , frame(std::move(other.frame))
+        , is_empty(other.is_empty)
     {
+        other.is_empty = true;
     }
 
     presentation_frame(const presentation_frame&)            = delete;
@@ -101,6 +103,7 @@ struct presentation_frame
     {
         timestamp = rhs.timestamp;
         frame     = std::move(rhs.frame);
+        is_empty  = rhs.is_empty;
         return *this;
     }
 
@@ -131,7 +134,6 @@ class html_client
     std::atomic<bool>                    loaded_;
     std::queue<presentation_frame>       frames_;
     std::queue<presentation_frame>       audio_frames_;
-    core::draw_frame                     last_generated_frame_;
     mutable std::mutex                   frames_mutex_;
     mutable std::mutex                   audio_frames_mutex_;
     const size_t                         frames_max_size_ = 4;
@@ -139,6 +141,7 @@ class html_client
 
     std::unique_ptr<ffmpeg::AudioResampler> audioResampler_;
 
+    core::draw_frame   last_video_frame_;
     core::draw_frame   last_frame_;
     std::int_least64_t last_frame_time_;
 
@@ -195,14 +198,17 @@ class html_client
 
     bool try_pop(const core::video_field field)
     {
+        bool result = false;
         std::lock_guard<std::mutex> lock(frames_mutex_);
 
         core::draw_frame audio_frame;
+        uint64_t audio_frame_timestamp = 0;
 
+        auto current_time = now();
         {
-            // CASPAR_LOG(info) << "[html_producer] receive: last_frame_time_: " << last_frame_time_;
             std::lock_guard<std::mutex> audio_lock(audio_frames_mutex_);
-            if (!audio_frames_.empty()) {
+            if (!audio_frames_.empty() && audio_frames_.front().timestamp <= current_time) {
+                audio_frame_timestamp = audio_frames_.front().timestamp;
                 audio_frame = core::draw_frame(std::move(audio_frames_.front().frame));
                 audio_frames_.pop();
             }
@@ -235,31 +241,28 @@ class html_client
                 }
             }
 
-            last_frame_time_ = frames_.front().timestamp;
-            last_frame_      = std::move(frames_.front().frame);
-
+            last_frame_time_  = frames_.front().timestamp;
+            last_video_frame_ = std::move(frames_.front().frame);
+            last_frame_       = last_video_frame_;
             frames_.pop();
 
-            if (audio_frame)
-                last_frame_= core::draw_frame::over(last_frame_, audio_frame);
 
             graph_->set_value("buffered-frames", (double)frames_.size() / frames_max_size_);
 
-            return true;
+            result = true;
         }
 
         if (audio_frame) {
-            last_frame_time_ = now();
-            last_frame_ = core::draw_frame::over(last_frame_, audio_frame);
-            return true;
+            last_frame_time_ = audio_frame_timestamp;
+            last_frame_      = core::draw_frame::over(last_video_frame_, audio_frame);
+            result = true;
         }
 
-        return false;
+        return result;
     }
 
     core::draw_frame receive(const core::video_field field)
     {
-
         if (!try_pop(field)) {
             graph_->set_tag(diagnostics::tag_severity::SILENT, "late-frame");
             return core::draw_frame::still(last_frame_);
@@ -369,7 +372,6 @@ class html_client
             std::lock_guard<std::mutex> lock(frames_mutex_);
 
             core::draw_frame new_frame = core::draw_frame(std::move(frame));
-            last_generated_frame_      = new_frame;
 
             frames_.push(presentation_frame(std::move(new_frame)));
             while (frames_.size() > frames_max_size_) {
@@ -480,7 +482,6 @@ class html_client
 
     void OnAudioStreamStarted(CefRefPtr<CefBrowser> browser, const CefAudioParameters& params, int channels) override
     {
-        //48000
         CASPAR_LOG(info) << "[html_producer] OnAudioStreamStarted: sample_rate: " << params.sample_rate;
         audioResampler_ = std::make_unique<ffmpeg::AudioResampler>(params.sample_rate, AV_SAMPLE_FMT_FLTP);
     }
@@ -497,8 +498,7 @@ class html_client
             while (audio_frames_.size() >= frames_max_size_) {
                 audio_frames_.pop();
             }
-            // CASPAR_LOG(info) << "[html_producer] OnAudioStreamPacket: pts: " << pts;
-            audio_frames_.push(presentation_frame(core::draw_frame(std::move(audio_frame))));
+            audio_frames_.push(presentation_frame(core::draw_frame(std::move(audio_frame)), pts + 40));
         }
     }
     void OnAudioStreamStopped(CefRefPtr<CefBrowser> browser) override { audioResampler_ = nullptr; }
