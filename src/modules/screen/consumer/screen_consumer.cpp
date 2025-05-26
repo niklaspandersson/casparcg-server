@@ -110,6 +110,7 @@ struct configuration
     bool            borderless    = false;
     bool            always_on_top = false;
     colour_spaces   colour_space  = colour_spaces::RGB;
+    bool            high_bitdeph  = false;
 };
 
 struct frame
@@ -275,9 +276,10 @@ struct screen_consumer
                     screen::frame frame;
                     auto          flags = GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT | GL_MAP_WRITE_BIT;
                     GL(glCreateBuffers(1, &frame.pbo));
-                    GL(glNamedBufferStorage(frame.pbo, format_desc_.size, nullptr, flags));
+                    auto size_multiplier = config_.high_bitdeph ? 2 : 1;
+                    GL(glNamedBufferStorage(frame.pbo, format_desc_.size * size_multiplier, nullptr, flags));
                     frame.ptr =
-                        reinterpret_cast<char*>(GL2(glMapNamedBufferRange(frame.pbo, 0, format_desc_.size, flags)));
+                        reinterpret_cast<char*>(GL2(glMapNamedBufferRange(frame.pbo, 0, format_desc_.size * size_multiplier, flags)));
 
                     GL(glCreateTextures(GL_TEXTURE_2D, 1, &frame.tex));
                     GL(glTextureParameteri(frame.tex,
@@ -294,8 +296,8 @@ struct screen_consumer
                                                : GL_LINEAR));
                     GL(glTextureParameteri(frame.tex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE));
                     GL(glTextureParameteri(frame.tex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
-                    GL(glTextureStorage2D(frame.tex, 1, GL_RGBA8, format_desc_.width, format_desc_.height));
-                    GL(glClearTexImage(frame.tex, 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr));
+                    GL(glTextureStorage2D(frame.tex, 1, GL_RGBA16, format_desc_.width, format_desc_.height));
+                    GL(glClearTexImage(frame.tex, 0, GL_BGRA, GL_UNSIGNED_SHORT, nullptr));
 
                     frames_.push_back(frame);
                 }
@@ -396,11 +398,12 @@ struct screen_consumer
                 }
             }
 
-            std::memcpy(frame.ptr, in_frame.image_data(0).begin(), format_desc_.size);
+            auto size_multiplier = config_.high_bitdeph ? 2 : 1;
+            std::memcpy(frame.ptr, in_frame.image_data(0).begin(), format_desc_.size * size_multiplier);
 
             GL(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, frame.pbo));
             GL(glTextureSubImage2D(
-                frame.tex, 0, 0, 0, format_desc_.width, format_desc_.height, GL_BGRA, GL_UNSIGNED_BYTE, nullptr));
+                frame.tex, 0, 0, 0, format_desc_.width, format_desc_.height, GL_BGRA, GL_UNSIGNED_SHORT, nullptr));
             GL(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0));
 
             frame.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
@@ -618,8 +621,7 @@ spl::shared_ptr<core::frame_consumer> create_consumer(const std::vector<std::wst
 
     configuration config;
 
-    if (channel_info.depth != common::bit_depth::bit8)
-        CASPAR_THROW_EXCEPTION(caspar_exception() << msg_info("Screen consumer only supports 8-bit color depth."));
+    config.high_bitdeph = (channel_info.depth != common::bit_depth::bit8);
 
     if (params.size() > 1) {
         try {
@@ -667,8 +669,7 @@ create_preconfigured_consumer(const boost::property_tree::wptree&               
 {
     configuration config;
 
-    if (channel_info.depth != common::bit_depth::bit8)
-        CASPAR_THROW_EXCEPTION(caspar_exception() << msg_info("Screen consumer only supports 8-bit color depth."));
+    config.high_bitdeph = (channel_info.depth != common::bit_depth::bit8);
 
     config.name          = ptree.get(L"name", config.name);
     config.screen_index  = ptree.get(L"device", config.screen_index + 1) - 1;
