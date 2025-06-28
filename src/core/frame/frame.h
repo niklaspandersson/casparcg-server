@@ -85,7 +85,7 @@ class const_frame final
 
     const array<const std::int32_t>& audio_data() const;
 
-    std::shared_ptr<core::texture> texture();
+    std::shared_ptr<core::texture> texture() const;
 
     std::size_t width() const;
 

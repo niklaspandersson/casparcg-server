@@ -107,7 +107,7 @@ struct const_frame::impl
         , audio_data_(std::move(audio_data))
         , desc_(desc)
         , tag_(tag)
-        , texture_(std::move(texture))
+        , texture_(texture)
     {
         if (desc_.planes.size() != image_data_.size()) {
             CASPAR_THROW_EXCEPTION(invalid_argument());
@@ -172,7 +172,7 @@ bool                     const_frame::operator>(const const_frame& other) const 
 const pixel_format_desc& const_frame::pixel_format_desc() const { return impl_->desc_; }
 const array<const std::uint8_t>& const_frame::image_data(std::size_t index) const { return impl_->image_data(index); }
 const array<const std::int32_t>& const_frame::audio_data() const { return impl_->audio_data_; }
-std::shared_ptr<core::texture>   const_frame::texture() { return impl_->texture(); }
+std::shared_ptr<core::texture>   const_frame::texture() const { return impl_->texture(); }
 std::size_t                      const_frame::width() const { return impl_->width(); }
 std::size_t                      const_frame::height() const { return impl_->height(); }
 std::size_t                      const_frame::size() const { return impl_->size(); }
@@ -184,7 +184,7 @@ const_frame                      const_frame::with_tag(const void* new_tag) cons
     }
 
     std::vector<array<const std::uint8_t>> image_data_copy = impl_->image_data_;
-    auto new_frame = const_frame(new_tag, std::move(image_data_copy), impl_->audio_data_, impl_->desc_);
+    auto new_frame = const_frame(new_tag, std::move(image_data_copy), impl_->audio_data_, impl_->desc_, impl_->texture_);
 
     new_frame.impl_->geometry_ = impl_->geometry_;
     if (impl_->opaque_.has_value()) {
