@@ -16,6 +16,7 @@ bin2c("consumer/screen.vert" "consumer_screen_vertex.h" "caspar::screen" "vertex
 bin2c("consumer/screen.frag" "consumer_screen_fragment.h" "caspar::screen" "fragment_shader")
 
 if (MSVC)
+elseif(APPLE)
 else ()
 	list(APPEND SOURCES
 		util/x11_util.cpp
@@ -30,6 +31,7 @@ casparcg_add_module_project(screen
 target_include_directories(screen PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}
     ${FFMPEG_INCLUDE_PATH}
+    ${SFML_INCLUDE_PATH}
 )
 target_link_libraries(screen PRIVATE accelerator ffmpeg GLEW::glew sfml-window)
 
