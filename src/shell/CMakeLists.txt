@@ -23,6 +23,10 @@ if (MSVC)
 			shell.rc
 			windows_specific.cpp
 	)
+elseif(APPLE)
+	list(APPEND SOURCES
+			linux_specific.cpp
+	)
 else ()
 	list(APPEND SOURCES
 			linux_specific.cpp
@@ -53,7 +57,7 @@ target_link_libraries(casparcg
 
 		TBB::tbb
 		TBB::tbbmalloc
-		GLEW::glew
+		Vulkan::Vulkan
 )
 
 if (MSVC)
@@ -78,14 +82,12 @@ if (MSVC)
 else ()
 	target_link_libraries(casparcg
 		${Boost_LIBRARIES}
-		OpenGL::GL
-		OpenGL::OpenGL
-		OpenGL::EGL
-		${X11_LIBRARIES}
+		Vulkan::Vulkan
+		# ${X11_LIBRARIES}
 		${FFMPEG_LIBRARIES}
 		dl
-		icui18n
-		icuuc
+		# icui18n
+		# icuuc
 		z
 		pthread
 	)

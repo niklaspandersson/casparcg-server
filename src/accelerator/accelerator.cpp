@@ -1,7 +1,7 @@
 #include "accelerator.h"
 
-#include "ogl/image/image_mixer.h"
-#include "ogl/util/device.h"
+#include "vulkan/image/image_mixer.h"
+#include "vulkan/util/device.h"
 
 #include <boost/property_tree/ptree.hpp>
 
@@ -17,7 +17,7 @@ namespace caspar { namespace accelerator {
 
 struct accelerator::impl
 {
-    std::shared_ptr<ogl::device>        ogl_device_;
+    std::shared_ptr<vulkan::device>     vulkan_device_;
     const core::video_format_repository format_repository_;
 
     impl(const core::video_format_repository format_repository)
@@ -27,17 +27,17 @@ struct accelerator::impl
 
     std::unique_ptr<core::image_mixer> create_image_mixer(int channel_id, common::bit_depth depth)
     {
-        return std::make_unique<ogl::image_mixer>(
+        return std::make_unique<vulkan::image_mixer>(
             spl::make_shared_ptr(get_device()), channel_id, format_repository_.get_max_video_format_size(), depth);
     }
 
-    std::shared_ptr<ogl::device> get_device()
+    std::shared_ptr<vulkan::device> get_device()
     {
-        if (!ogl_device_) {
-            ogl_device_ = std::make_shared<ogl::device>();
+        if (!vulkan_device_) {
+            vulkan_device_ = std::make_shared<vulkan::device>();
         }
 
-        return ogl_device_;
+        return vulkan_device_;
     }
 };
 

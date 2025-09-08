@@ -13,7 +13,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CASPARCG_DOWNLOAD_MIRROR https://github.com/CasparCG/dependencies/releases/download/ CACHE STRING "Source/mirror to use for external dependencies")
 set(CASPARCG_DOWNLOAD_CACHE ${CMAKE_CURRENT_BINARY_DIR}/external CACHE STRING "Download cache directory for cmake ExternalProjects")
 
-option(ENABLE_HTML "Enable HTML module, require CEF" ON)
+option(ENABLE_HTML "Enable HTML module, require CEF" OFF)
 
 set(DIAG_FONT_PATH "LiberationMono-Regular.ttf" CACHE STRING
     "Path to font that will be used to load diag font at runtime. By default
@@ -48,6 +48,8 @@ configure_file("${PROJECT_SOURCE_DIR}/version.tmpl" "${CMAKE_BINARY_DIR}/generat
 
 if(MSVC)
     include(Bootstrap_Windows)
+elseif(APPLE)
+    include(Bootstrap_Mac)
 else ()
     include(Bootstrap_Linux)
 
