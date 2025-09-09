@@ -738,6 +738,8 @@ struct screen_consumer_proxy : public core::frame_consumer
 
     bool has_synchronization_clock() const override { return false; }
 
+    bool consumes_gpu_texture() const override { return config_.gpu_texture; }
+
     int index() const override { return 600 + (config_.key_only ? 10 : 0) + config_.screen_index; }
 
     core::monitor::state state() const override

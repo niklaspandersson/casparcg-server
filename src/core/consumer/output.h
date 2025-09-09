@@ -57,6 +57,7 @@ class output final
     std::future<bool> call(int index, const std::vector<std::wstring>& params);
 
     size_t consumer_count() const;
+    bool   need_host_frame() const;
 
     core::monitor::state state() const;
 

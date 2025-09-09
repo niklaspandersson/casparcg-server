@@ -68,9 +68,9 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
     std::wstring version_;
 
-    io_context                          io_context_;
+    io_context                             io_context_;
     decltype(make_work_guard(io_context_)) work_;
-    std::thread                         thread_;
+    std::thread                            thread_;
 
     impl()
         : context_(new device_context())
@@ -280,6 +280,31 @@ struct device::impl : public std::enable_shared_from_this<impl>
         });
     }
 
+    std::future<array<const std::uint8_t>> client_wait_sync(uint8_t const* data, size_t size)
+    {
+        return spawn_async([=](yield_context yield) {
+            auto fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+
+            GL(glFlush());
+
+            deadline_timer timer(io_context_);
+            for (auto n = 0; true; ++n) {
+                // TODO (perf) Smarter non-polling solution?
+                timer.expires_from_now(boost::posix_time::milliseconds(2));
+                timer.async_wait(yield);
+
+                auto wait = glClientWaitSync(fence, 0, 1);
+                if (wait == GL_ALREADY_SIGNALED || wait == GL_CONDITION_SATISFIED) {
+                    break;
+                }
+            }
+
+            glDeleteSync(fence);
+
+            return array<const std::uint8_t>(data, size, true);
+        });
+    }
+
     boost::property_tree::wptree info() const
     {
         boost::property_tree::wptree info;
@@ -408,8 +433,12 @@ std::future<array<const uint8_t>> device::copy_async(const std::shared_ptr<textu
 {
     return impl_->copy_async(source);
 }
-void         device::dispatch(std::function<void()> func) { boost::asio::dispatch(impl_->io_context_, std::move(func)); }
-std::wstring device::version() const { return impl_->version(); }
+void device::dispatch(std::function<void()> func) { boost::asio::dispatch(impl_->io_context_, std::move(func)); }
+std::future<array<const std::uint8_t>> device::client_wait_sync(uint8_t const* data, size_t size)
+{
+    return impl_->client_wait_sync(data, size);
+}
+std::wstring                 device::version() const { return impl_->version(); }
 boost::property_tree::wptree device::info() const { return impl_->info(); }
 std::future<void>            device::gc() { return impl_->gc(); }
 }}} // namespace caspar::accelerator::ogl

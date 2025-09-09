@@ -104,6 +104,11 @@ struct output::impl
         return consumers_.size();
     }
 
+    bool need_host_frame() {
+        std::lock_guard<std::mutex> lock(consumers_mutex_);
+        return !std::all_of(consumers_.begin(), consumers_.end(), [](auto& p) { return p.second->consumes_gpu_texture(); });
+    }
+
     void operator()(const const_frame&             input_frame1,
                     const const_frame&             input_frame2,
                     const core::video_format_desc& format_desc)
