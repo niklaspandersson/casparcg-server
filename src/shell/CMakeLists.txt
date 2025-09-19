@@ -59,6 +59,9 @@ target_link_libraries(casparcg
 		TBB::tbbmalloc
 		Vulkan::Vulkan
 )
+if(NOT APPLE)
+    target_link_libraries(casparcg GLEW::glew)
+endif()
 
 if (MSVC)
 	target_link_libraries(casparcg
@@ -67,7 +70,7 @@ if (MSVC)
 		OpenGL32.lib
 		debug zlibstaticd.lib
 		optimized zlibstatic.lib
-
+        Vulkan::Vulkan
 		OpenAL::OpenAL
 		optimized TBB::tbbmalloc_proxy
 
