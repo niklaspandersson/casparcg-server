@@ -151,6 +151,8 @@ target_link_directories(GLEW::glew INTERFACE ${glew_SOURCE_DIR}/lib/Release/x64)
 target_link_libraries(GLEW::glew INTERFACE glew32)
 casparcg_add_runtime_dependency("${glew_SOURCE_DIR}/bin/Release/x64/glew32.dll")
 
+find_package(Vulkan REQUIRED)
+
 # SFML
 FetchContent_Declare(sfml
 	URL ${CASPARCG_DOWNLOAD_MIRROR}/sfml/SFML-2.6.2-windows-vc17-64-bit.zip
