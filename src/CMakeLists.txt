@@ -26,6 +26,8 @@ add_compile_definitions("DIAG_FONT_PATH=\"${DIAG_FONT_PATH}\"")
 # Add custom cmake modules path
 set(CASPARCG_PATCH_DIR ${CMAKE_SOURCE_DIR}/CMakeModules/patches)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/CMakeModules)
+list(APPEND CMAKE_PREFIX_PATH /opt/homebrew/lib/pkgconfig)
+
 
 # Determine the git hash
 find_package(Git)

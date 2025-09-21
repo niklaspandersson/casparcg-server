@@ -39,8 +39,6 @@
 #include <core/frame/pixel_format.h>
 #include <core/video_format.h>
 
-#include <GL/glew.h>
-
 #include <any>
 #include <vector>
 
@@ -254,12 +252,15 @@ struct image_mixer::impl
     double aspect_ratio_ = 1.0;
 
   public:
-    impl(const spl::shared_ptr<device>& ogl, const int channel_id, const size_t max_frame_size, common::bit_depth depth)
-        : vulkan_(ogl)
-        , renderer_(ogl, max_frame_size, depth)
+    impl(const spl::shared_ptr<device>& device,
+         const int                      channel_id,
+         const size_t                   max_frame_size,
+         common::bit_depth              depth)
+        : vulkan_(device)
+        , renderer_(device, max_frame_size, depth)
         , transform_stack_(1)
     {
-        CASPAR_LOG(info) << L"Initialized OpenGL Accelerated GPU Image Mixer for channel " << channel_id;
+        CASPAR_LOG(info) << L"Initialized Vulkan Accelerated GPU Image Mixer for channel " << channel_id;
     }
 
     void update_aspect_ratio(double aspect_ratio) { aspect_ratio_ = aspect_ratio; }

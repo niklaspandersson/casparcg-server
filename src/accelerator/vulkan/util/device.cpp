@@ -21,7 +21,6 @@
 #include "device.h"
 
 #include "buffer.h"
-#include "context.h"
 #include "shader.h"
 #include "texture.h"
 
@@ -55,8 +54,6 @@ struct device::impl : public std::enable_shared_from_this<impl>
     using texture_queue_t = tbb::concurrent_bounded_queue<std::shared_ptr<texture>>;
     using buffer_queue_t  = tbb::concurrent_bounded_queue<std::shared_ptr<buffer>>;
 
-    std::unique_ptr<device_context> context_;
-
     std::array<std::array<tbb::concurrent_unordered_map<size_t, texture_queue_t>, 4>, 2> device_pools_;
     std::array<tbb::concurrent_unordered_map<size_t, buffer_queue_t>, 2>                 host_pools_;
 
@@ -69,10 +66,9 @@ struct device::impl : public std::enable_shared_from_this<impl>
     std::thread                            thread_;
 
     impl()
-        : context_(new device_context())
-        , work_(make_work_guard(io_context_))
+        : work_(make_work_guard(io_context_))
     {
-        CASPAR_LOG(info) << L"Initializing Vulkan Device.";
+        CASPAR_LOG(info) << L"Initializing (noop) Vulkan Device.";
 
         // context_->bind();
 

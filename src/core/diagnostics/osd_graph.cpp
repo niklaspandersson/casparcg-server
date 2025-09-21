@@ -146,10 +146,10 @@ class context : public drawable
                 window_->setActive();
                 window_->setVerticalSyncEnabled(true);
                 calculate_view_ = true;
-                glEnable(GL_BLEND);
-                glEnable(GL_LINE_SMOOTH);
-                glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                // glEnable(GL_BLEND);
+                // glEnable(GL_LINE_SMOOTH);
+                // glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
+                // glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
                 tick();
             }
@@ -350,8 +350,8 @@ class line : public drawable
                 target.draw(connecting_line, states);
             }
         } else {
-            glEnable(GL_LINE_STIPPLE);
-            glLineStipple(3, 0xAAAA);
+            // glEnable(GL_LINE_STIPPLE);
+            // glLineStipple(3, 0xAAAA);
 
             for (size_t n = 0; n < line_tags_.size(); ++n) {
                 if (line_tags_[n]) {
@@ -359,7 +359,7 @@ class line : public drawable
                 }
             }
 
-            glDisable(GL_LINE_STIPPLE);
+            // glDisable(GL_LINE_STIPPLE);
         }
     }
 
@@ -487,14 +487,14 @@ struct graph
             return result;
         }();
 
-        glEnable(GL_LINE_STIPPLE);
-        glLineStipple(3, 0xAAAA);
+        // glEnable(GL_LINE_STIPPLE);
+        // glLineStipple(3, 0xAAAA);
 
         target.draw(middle_guide, states);
         target.draw(bottom_guide, states);
         target.draw(top_guide, states);
 
-        glDisable(GL_LINE_STIPPLE);
+        // glDisable(GL_LINE_STIPPLE);
 
         for (auto it = lines_.begin(); it != lines_.end(); ++it) {
             target.draw(it->second, states);

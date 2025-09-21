@@ -12,7 +12,7 @@ if(POLICY CMP0167)
 endif()
 
 set(ENABLE_HTML OFF CACHE BOOL "Enable CEF and HTML producer")
-set(USE_STATIC_BOOST ON CACHE BOOL "Use shared library version of Boost")
+set(USE_STATIC_BOOST OFF CACHE BOOL "Use shared library version of Boost")
 set(CASPARCG_BINARY_NAME "casparcg" CACHE STRING "Custom name of the binary to build (this disables some install files)")
 set(ENABLE_AVX2 OFF CACHE BOOL "Enable the AVX2 instruction set (requires a CPU that supports it)")
 
@@ -29,10 +29,11 @@ MARK_AS_ADVANCED (CMAKE_INSTALL_PREFIX)
 if (USE_STATIC_BOOST)
 	SET (Boost_USE_STATIC_LIBS ON)
 endif()
-find_package(Boost 1.74.0 REQUIRED)
+find_package(Boost 1.74.0 COMPONENTS thread filesystem log_setup log locale regex date_time coroutine REQUIRED)
 find_package(FFmpeg REQUIRED)
-find_package(GLEW REQUIRED)
+# find_package(GLEW REQUIRED)
 find_package(TBB REQUIRED)
+find_package(zstd REQUIRED)
 find_package(OpenAL REQUIRED)
 find_package(SFML 2 COMPONENTS graphics window REQUIRED PATHS /opt/homebrew/opt/sfml@2)
 
@@ -106,6 +107,7 @@ SET (FFMPEG_INCLUDE_PATH "${FFMPEG_INCLUDE_DIRS}")
 SET (SFML_INCLUDE_PATH "${SFML_INCLUDE_DIRS}")
 
 LINK_DIRECTORIES("${FFMPEG_LIBRARY_DIRS}")
+LINK_DIRECTORIES("${Boost_LIBRARY_DIRS}")
 
 SET_PROPERTY (GLOBAL PROPERTY USE_FOLDERS ON)
 
@@ -129,7 +131,7 @@ IF (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 
 ADD_COMPILE_DEFINITIONS (_GNU_SOURCE)
-#ADD_COMPILE_DEFINITIONS (USE_SIMDE) 
+ADD_COMPILE_DEFINITIONS (USE_SIMDE) 
 # ADD_COMPILE_DEFINITIONS (SIMDE_ENABLE_OPENMP) # Enable OpenMP support in simde
 # ADD_COMPILE_OPTIONS (-fopenmp-simd) # Enable OpenMP SIMD support
 ADD_COMPILE_OPTIONS (-fnon-call-exceptions) # Allow signal handler to throw exception

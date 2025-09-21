@@ -21,7 +21,6 @@ set(HEADERS
 	vulkan/image/image_shader.h
 
 	vulkan/util/buffer.h
-	vulkan/util/context.h
 	vulkan/util/device.h
 	vulkan/util/shader.h
 	vulkan/util/texture.h
@@ -69,16 +68,11 @@ endif()
 if (MSVC)
 	list(APPEND SOURCES
 		ogl/util/context_sfml.cpp
-		vulkan/util/context_sfml.cpp
 	)
 elseif (APPLE)
-	list(APPEND SOURCES
-		vulkan/util/context_sfml.cpp
-	)
 else()
 	list(APPEND SOURCES
 		ogl/util/context_egl.cpp
-		vulkan/util/context_egl.cpp
 	)
 endif()
 
@@ -91,7 +85,7 @@ bin2c("ogl/image/shader.frag" "ogl_image_fragment.h" "caspar::accelerator::ogl" 
 casparcg_add_library(accelerator SOURCES ${SOURCES} ${HEADERS})
 target_include_directories(accelerator PRIVATE .. ${CMAKE_CURRENT_BINARY_DIR} ${SFML_INCLUDE_PATH})
 target_precompile_headers(accelerator PRIVATE StdAfx.h)
-target_link_libraries(accelerator PRIVATE common core GLEW::glew Vulkan::Vulkan)
+target_link_libraries(accelerator PRIVATE common core Vulkan::Vulkan)
 
 if(NOT APPLE)
 target_link_libraries(accelerator PRIVATE GLEW::glew)
