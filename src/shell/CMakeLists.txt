@@ -25,7 +25,7 @@ if (MSVC)
 	)
 elseif(APPLE)
 	list(APPEND SOURCES
-			linux_specific.cpp
+			macos_specific.cpp
 	)
 else ()
 	list(APPEND SOURCES
@@ -91,7 +91,7 @@ else ()
 		dl
 		# icui18n
 		# icuuc
-		z
+		# z
 		pthread
 	)
 endif ()

@@ -51,12 +51,12 @@ struct buffer::impl
     impl(int size, bool write)
         : size_(size)
         , write_(write)
-        , target_(!write ? GL_PIXEL_PACK_BUFFER : GL_PIXEL_UNPACK_BUFFER)
-        , flags_(GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT | (write ? GL_MAP_WRITE_BIT : GL_MAP_READ_BIT))
+    // , target_(!write ? GL_PIXEL_PACK_BUFFER : GL_PIXEL_UNPACK_BUFFER)
+    // , flags_(GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT | (write ? GL_MAP_WRITE_BIT : GL_MAP_READ_BIT))
     {
-        GL(glCreateBuffers(1, &id_));
-        GL(glNamedBufferStorage(id_, size_, nullptr, flags_));
-        data_ = GL2(glMapNamedBufferRange(id_, 0, size_, flags_));
+        // GL(glCreateBuffers(1, &id_));
+        // GL(glNamedBufferStorage(id_, size_, nullptr, flags_));
+        // data_ = GL2(glMapNamedBufferRange(id_, 0, size_, flags_));
 
         (write ? g_w_total_count : g_r_total_count)++;
         (write ? g_w_total_size : g_r_total_size) += size_;
@@ -64,16 +64,16 @@ struct buffer::impl
 
     ~impl()
     {
-        GL(glUnmapNamedBuffer(id_));
-        glDeleteBuffers(1, &id_);
+        // GL(glUnmapNamedBuffer(id_));
+        // glDeleteBuffers(1, &id_);
 
         (write_ ? g_w_total_size : g_r_total_size) -= size_;
         (write_ ? g_w_total_count : g_r_total_count)--;
     }
 
-    void bind() { GL(glBindBuffer(target_, id_)); }
+    void bind() { /*GL(glBindBuffer(target_, id_));*/ }
 
-    void unbind() { GL(glBindBuffer(target_, 0)); }
+    void unbind() { /*GL(glBindBuffer(target_, 0));*/ }
 };
 
 buffer::buffer(int size, bool write)

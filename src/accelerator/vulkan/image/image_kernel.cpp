@@ -27,15 +27,13 @@
 #include "../util/texture.h"
 
 #include <common/assert.h>
-#include <common/gl/gl_check.h>
+// #include <common/gl/gl_check.h>
 
 #include <core/frame/frame_transform.h>
 #include <core/frame/pixel_format.h>
 
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/range/adaptor/transformed.hpp>
-
-#include <GL/glew.h>
 
 #include <array>
 #include <cmath>
@@ -92,16 +90,16 @@ struct image_kernel::impl
         , shader_(vulkan_->dispatch_sync([&] { return get_image_shader(ogl); }))
     {
         vulkan_->dispatch_sync([&] {
-            GL(glGenVertexArrays(1, &vao_));
-            GL(glGenBuffers(1, &vbo_));
+            // GL(glGenVertexArrays(1, &vao_));
+            // GL(glGenBuffers(1, &vbo_));
         });
     }
 
     ~impl()
     {
         vulkan_->dispatch_sync([&] {
-            GL(glDeleteVertexArrays(1, &vao_));
-            GL(glDeleteBuffers(1, &vbo_));
+            // GL(glDeleteVertexArrays(1, &vao_));
+            // GL(glDeleteBuffers(1, &vbo_));
         });
     }
 
@@ -282,44 +280,44 @@ struct image_kernel::impl
 
         // Setup drawing area
 
-        GL(glViewport(0, 0, params.background->width(), params.background->height()));
-        glDisable(GL_DEPTH_TEST);
+        // GL(glViewport(0, 0, params.background->width(), params.background->height()));
+        // glDisable(GL_DEPTH_TEST);
 
         // Set render target
         params.background->attach();
 
         // Draw
-        GL(glBindVertexArray(vao_));
-        GL(glBindBuffer(GL_ARRAY_BUFFER, vbo_));
+        // GL(glBindVertexArray(vao_));
+        // GL(glBindBuffer(GL_ARRAY_BUFFER, vbo_));
 
-        GL(glBufferData(GL_ARRAY_BUFFER,
-                        static_cast<GLsizeiptr>(sizeof(core::frame_geometry::coord)) * coords.size(),
-                        coords.data(),
-                        GL_STATIC_DRAW));
+        // GL(glBufferData(GL_ARRAY_BUFFER,
+        //                 static_cast<GLsizeiptr>(sizeof(core::frame_geometry::coord)) * coords.size(),
+        //                 coords.data(),
+        //                 GL_STATIC_DRAW));
 
         auto stride = static_cast<GLsizei>(sizeof(core::frame_geometry::coord));
 
         auto vtx_loc = shader_->get_attrib_location("Position");
         auto tex_loc = shader_->get_attrib_location("TexCoordIn");
 
-        GL(glEnableVertexAttribArray(vtx_loc));
-        GL(glEnableVertexAttribArray(tex_loc));
+        // GL(glEnableVertexAttribArray(vtx_loc));
+        // GL(glEnableVertexAttribArray(tex_loc));
 
-        GL(glVertexAttribPointer(vtx_loc, 2, GL_DOUBLE, GL_FALSE, stride, nullptr));
-        GL(glVertexAttribPointer(tex_loc, 4, GL_DOUBLE, GL_FALSE, stride, (GLvoid*)(2 * sizeof(GLdouble))));
+        // GL(glVertexAttribPointer(vtx_loc, 2, GL_DOUBLE, GL_FALSE, stride, nullptr));
+        // GL(glVertexAttribPointer(tex_loc, 4, GL_DOUBLE, GL_FALSE, stride, (GLvoid*)(2 * sizeof(GLdouble))));
 
-        GL(glDrawArrays(GL_TRIANGLE_FAN, 0, static_cast<GLsizei>(coords.size())));
-        GL(glTextureBarrier());
+        // GL(glDrawArrays(GL_TRIANGLE_FAN, 0, static_cast<GLsizei>(coords.size())));
+        // GL(glTextureBarrier());
 
-        GL(glDisableVertexAttribArray(vtx_loc));
-        GL(glDisableVertexAttribArray(tex_loc));
+        // GL(glDisableVertexAttribArray(vtx_loc));
+        // GL(glDisableVertexAttribArray(tex_loc));
 
-        GL(glBindVertexArray(0));
-        GL(glBindBuffer(GL_ARRAY_BUFFER, 0));
+        // GL(glBindVertexArray(0));
+        // GL(glBindBuffer(GL_ARRAY_BUFFER, 0));
 
         // Cleanup
-        GL(glDisable(GL_SCISSOR_TEST));
-        GL(glDisable(GL_BLEND));
+        // GL(glDisable(GL_SCISSOR_TEST));
+        // GL(glDisable(GL_BLEND));
     }
 };
 
