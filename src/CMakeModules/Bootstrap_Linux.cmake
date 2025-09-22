@@ -39,6 +39,8 @@ find_package(OpenAL REQUIRED)
 find_package(SFML 2 COMPONENTS graphics window REQUIRED)
 find_package(X11 REQUIRED)
 
+find_package(Vulkan REQUIRED)
+
 # support for Ubuntu 22.04
 if (NOT TARGET OpenAL::OpenAL)
     add_library(OpenAL::OpenAL INTERFACE IMPORTED)

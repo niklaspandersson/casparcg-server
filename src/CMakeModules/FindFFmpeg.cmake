@@ -31,11 +31,17 @@
 
 include(FindPackageHandleStandardArgs)
 
-# The default components were taken from a survey over other FindFFMPEG.cmake files
-if (NOT FFmpeg_FIND_COMPONENTS)
-  set(FFmpeg_FIND_COMPONENTS AVCODEC AVFORMAT AVUTIL AVDEVICE AVFILTER SWSCALE SWRESAMPLE)
-endif ()
-
+if(NOT APPLE)
+  # The default components were taken from a survey over other FindFFMPEG.cmake files
+  if (NOT FFmpeg_FIND_COMPONENTS)
+    set(FFmpeg_FIND_COMPONENTS AVCODEC AVFORMAT AVUTIL AVDEVICE AVFILTER POSTPROC SWSCALE SWRESAMPLE)
+  endif ()
+else()
+  # The default components were taken from a survey over other FindFFMPEG.cmake files
+  if (NOT FFmpeg_FIND_COMPONENTS)
+    set(FFmpeg_FIND_COMPONENTS AVCODEC AVFORMAT AVUTIL AVDEVICE AVFILTER SWSCALE SWRESAMPLE)
+  endif ()
+endif()
 #
 ### Macro: set_component_found
 #

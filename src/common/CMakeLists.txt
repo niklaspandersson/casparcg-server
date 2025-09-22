@@ -22,6 +22,12 @@ if (MSVC)
 			os/windows/thread.cpp
 			os/windows/windows.h
 	)
+elseif (APPLE)
+	list(APPEND SOURCES
+			os/apple/filesystem.cpp
+			os/apple/prec_timer.cpp
+			os/apple/thread.cpp
+	)	
 else ()
 	list(APPEND SOURCES
 			os/linux/filesystem.cpp

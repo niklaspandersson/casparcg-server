@@ -13,7 +13,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CASPARCG_DOWNLOAD_MIRROR https://github.com/CasparCG/dependencies/releases/download/ CACHE STRING "Source/mirror to use for external dependencies")
 set(CASPARCG_DOWNLOAD_CACHE ${CMAKE_CURRENT_BINARY_DIR}/external CACHE STRING "Download cache directory for cmake ExternalProjects")
 
-option(ENABLE_HTML "Enable HTML module, require CEF" OFF)
+option(ENABLE_HTML "Enable HTML module, require CEF" ON)
 
 set(DIAG_FONT_PATH "LiberationMono-Regular.ttf" CACHE STRING
     "Path to font that will be used to load diag font at runtime. By default
@@ -26,8 +26,9 @@ add_compile_definitions("DIAG_FONT_PATH=\"${DIAG_FONT_PATH}\"")
 # Add custom cmake modules path
 set(CASPARCG_PATCH_DIR ${CMAKE_SOURCE_DIR}/CMakeModules/patches)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/CMakeModules)
-list(APPEND CMAKE_PREFIX_PATH /opt/homebrew/lib/pkgconfig)
-
+if(APPLE)
+    list(APPEND CMAKE_PREFIX_PATH /opt/homebrew/lib/pkgconfig)
+endif()
 
 # Determine the git hash
 find_package(Git)

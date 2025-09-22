@@ -70,7 +70,7 @@ if (MSVC)
 		OpenGL32.lib
 		debug zlibstaticd.lib
 		optimized zlibstatic.lib
-        Vulkan::Vulkan
+
 		OpenAL::OpenAL
 		optimized TBB::tbbmalloc_proxy
 
@@ -82,16 +82,29 @@ if (MSVC)
 		swscale.lib
 		swresample.lib
 	)
-else ()
-	target_link_libraries(casparcg
+elseif(APPLE)
+		target_link_libraries(casparcg
 		${Boost_LIBRARIES}
-		Vulkan::Vulkan
 		# ${X11_LIBRARIES}
 		${FFMPEG_LIBRARIES}
 		dl
 		# icui18n
 		# icuuc
 		# z
+		pthread
+	)
+else ()
+	target_link_libraries(casparcg
+		${Boost_LIBRARIES}
+		OpenGL::GL
+		OpenGL::OpenGL
+		OpenGL::EGL
+		${X11_LIBRARIES}
+		${FFMPEG_LIBRARIES}
+		dl
+		icui18n
+		icuuc
+		z
 		pthread
 	)
 endif ()
