@@ -28,10 +28,6 @@
 #include <functional>
 #include <future>
 
-#ifdef WIN32
-#include <GL/glew.h>
-#endif
-
 namespace caspar { namespace accelerator { namespace vulkan {
 
 class device final

@@ -28,9 +28,9 @@
 #include <common/assert.h>
 #include <common/env.h>
 #include <common/except.h>
-#include <common/gl/gl_check.h>
 #include <common/os/thread.h>
 
+#include <VkBootstrap.h>
 #include <vulkan/vulkan.hpp>
 
 #include <boost/asio/deadline_timer.hpp>
@@ -57,9 +57,9 @@ struct device::impl : public std::enable_shared_from_this<impl>
     std::array<std::array<tbb::concurrent_unordered_map<size_t, texture_queue_t>, 4>, 2> device_pools_;
     std::array<tbb::concurrent_unordered_map<size_t, buffer_queue_t>, 2>                 host_pools_;
 
-    GLuint fbo_;
-
     std::wstring version_;
+
+    vk::Device _device;
 
     io_context                             io_context_;
     decltype(make_work_guard(io_context_)) work_;
@@ -70,43 +70,43 @@ struct device::impl : public std::enable_shared_from_this<impl>
     {
         CASPAR_LOG(info) << L"Initializing (noop) Vulkan Device.";
 
-        // context_->bind();
+        auto instance_builder = vkb::InstanceBuilder()
+                                    .set_app_name("CasparCG")
+                                    .use_default_debug_messenger()
+                                    .set_engine_name("CasparCG")
+                                    .require_api_version(VK_API_VERSION_1_3)
+                                    .request_validation_layers(true);
+        auto instance_ret = instance_builder.build();
+        if (!instance_ret) {
+            CASPAR_THROW_EXCEPTION(caspar_exception()
+                                   << msg_info("Failed to create Vulkan instance: " + instance_ret.error().message()));
+        }
+        auto vkb_instance = instance_ret.value();
 
-        //         auto err = glewInit();
-        //         if (err != GLEW_OK && err != 4) { // GLEW_ERROR_NO_GLX_DISPLAY
-        //             std::stringstream str;
-        //             str << "Failed to initialize GLEW (" << (int)err << "): " << glewGetErrorString(err) <<
-        //             std::endl; CASPAR_THROW_EXCEPTION(std::runtime_error(str.str()));
-        //         }
+        // Find suitable physical device
+        auto gpu_selector = vkb::PhysicalDeviceSelector(vkb_instance);
 
-        // #ifdef WIN32
-        //         if (wglewInit() != GLEW_OK) {
-        //             CASPAR_THROW_EXCEPTION(vulkan::vulkan_exception() << msg_info("Failed to initialize GLEW."));
-        //         }
-        // #endif
+        auto gpu_res = gpu_selector.defer_surface_initialization().set_minimum_version(1, 3).select();
+        if (!gpu_res) {
+            CASPAR_THROW_EXCEPTION(caspar_exception()
+                                   << msg_info("Failed to select physical device: " + gpu_res.error().message()));
+        }
+        auto vkb_gpu = gpu_res.value();
 
-        // version_ = u16(reinterpret_cast<const char*>(GL2(glGetString(GL_VERSION)))) + L" " +
-        //            u16(reinterpret_cast<const char*>(GL2(glGetString(GL_VENDOR))));
+        // Create the logical device
+        auto device_builder = vkb::DeviceBuilder(vkb_gpu);
 
-        // CASPAR_LOG(info) << L"Initialized Vulkan " << version();
-
-        // if (!GLEW_VERSION_4_5 && !glewIsSupported("GL_ARB_sync GL_ARB_shader_objects GL_ARB_multitexture "
-        //                                           "GL_ARB_direct_state_access GL_ARB_texture_barrier")) {
-        //     CASPAR_THROW_EXCEPTION(not_supported()
-        //                            << msg_info("Your graphics card does not meet the minimum hardware requirements "
-        //                                        "since it does not support OpenGL 4.5 or higher."));
-        // }
-
-        // GL(glCreateFramebuffers(1, &fbo_));
-        // GL(glBindFramebuffer(GL_FRAMEBUFFER, fbo_));
-
-        // context_->unbind();
+        auto device_res = device_builder.build();
+        if (!device_res) {
+            CASPAR_THROW_EXCEPTION(caspar_exception()
+                                   << msg_info("Failed to create device: " + device_res.error().message()));
+        }
+        auto vkb_device = device_res.value();
+        _device         = vk::Device(vkb_device.device);
 
         thread_ = std::thread([&] {
-            // context_->bind();
             set_thread_name(L"Vulkan Device");
             io_context_.run();
-            // context_->unbind();
         });
     }
 
@@ -115,16 +115,12 @@ struct device::impl : public std::enable_shared_from_this<impl>
         work_.reset();
         thread_.join();
 
-        // context_->bind();
-
         for (auto& pool : host_pools_)
             pool.clear();
 
         for (auto& pools : device_pools_)
             for (auto& pool : pools)
                 pool.clear();
-
-        // GL(glDeleteFramebuffers(1, &fbo_));
     }
 
     template <typename Func>
