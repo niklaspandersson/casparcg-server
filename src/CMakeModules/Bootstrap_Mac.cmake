@@ -31,18 +31,20 @@ if (USE_STATIC_BOOST)
 endif()
 find_package(Boost 1.74.0 COMPONENTS thread filesystem log_setup log locale regex date_time coroutine REQUIRED)
 find_package(FFmpeg REQUIRED)
-# find_package(GLEW REQUIRED)
 find_package(TBB REQUIRED)
 find_package(zstd REQUIRED)
 find_package(OpenAL REQUIRED)
 find_package(SFML 2 COMPONENTS graphics window REQUIRED PATHS /opt/homebrew/opt/sfml@2)
 
-# FetchContent_Declare(
-#     fetch_vk_bootstrap
-#     GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap
-#     GIT_TAG        vv1.4.315 #suggest using a tag so the library doesn't update whenever new commits are pushed to a branch
-#     )
-# FetchContent_MakeAvailable(fetch_vk_bootstrap)
+
+# set(VK_BOOTSTRAP_VULKAN_HEADER_DIR ${VULKAN_INCLUDE_DIRS})
+FetchContent_Declare(
+    fetch_vk_bootstrap
+    GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap
+    GIT_TAG        v1.4.321 #suggest using a tag so the library doesn't update whenever new commits are pushed to a branch
+    )
+FetchContent_MakeAvailable(fetch_vk_bootstrap)
+
 find_package(Vulkan REQUIRED)
 
 FetchContent_Declare(
