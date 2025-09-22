@@ -85,7 +85,7 @@ bin2c("ogl/image/shader.frag" "ogl_image_fragment.h" "caspar::accelerator::ogl" 
 casparcg_add_library(accelerator SOURCES ${SOURCES} ${HEADERS})
 target_include_directories(accelerator PRIVATE .. ${CMAKE_CURRENT_BINARY_DIR})
 target_precompile_headers(accelerator PRIVATE StdAfx.h)
-target_link_libraries(accelerator PRIVATE common core Vulkan::Vulkan)
+target_link_libraries(accelerator PRIVATE common core vk-bootstrap::vk-bootstrap GPUOpen::VulkanMemoryAllocator Vulkan::Vulkan)
 
 if(NOT APPLE)
 target_link_libraries(accelerator PRIVATE GLEW::glew)
