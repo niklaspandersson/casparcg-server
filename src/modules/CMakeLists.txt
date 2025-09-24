@@ -5,7 +5,7 @@ project("modules")
 add_subdirectory(ffmpeg)
 # add_subdirectory(oal)
 # add_subdirectory(decklink)
-# add_subdirectory(screen)
+add_subdirectory(screen)
 # add_subdirectory(newtek)
 # add_subdirectory(artnet)
 
@@ -14,7 +14,7 @@ if (ENABLE_HTML)
 endif ()
 
 if (MSVC)
-	add_subdirectory(flash)
-	add_subdirectory(bluefish)
+#	add_subdirectory(flash)
+#	add_subdirectory(bluefish)
 endif()
 

@@ -23,13 +23,14 @@
 
 #include <common/bit_depth.h>
 #include <memory>
+#include <vulkan/vulkan.hpp>
 
 namespace caspar { namespace accelerator { namespace vulkan {
 
 class texture final
 {
   public:
-    texture(int width, int height, int stride, common::bit_depth depth = common::bit_depth::bit8);
+    texture(int width, int height, int stride, common::bit_depth depth, vk::Image image, vk::DeviceMemory memory, vk::ImageView imageView, vk::Device device);
     texture(const texture&) = delete;
     texture(texture&& other);
     ~texture();
@@ -54,7 +55,7 @@ class texture final
     common::bit_depth depth() const;
     void              set_depth(common::bit_depth depth);
     int               size() const;
-    int               id() const;
+    VkImage           id() const;
 
   private:
     struct impl;

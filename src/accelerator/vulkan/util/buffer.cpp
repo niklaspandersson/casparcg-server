@@ -26,6 +26,12 @@
 
 #include <vulkan/vulkan.hpp>
 
+
+#pragma warning(push)
+#pragma warning(disable: 4189)
+#include <vk_mem_alloc.h>
+#pragma warning(pop)
+
 #include <atomic>
 
 namespace caspar { namespace accelerator { namespace vulkan {
@@ -37,26 +43,36 @@ static std::atomic<std::size_t> g_r_total_size;
 
 struct buffer::impl
 {
-    GLuint     id_     = 0;
-    GLsizei    size_   = 0;
-    void*      data_   = nullptr;
+    int        size_   = 0;
     bool       write_  = false;
-    GLenum     target_ = 0;
-    GLbitfield flags_  = 0;
+
+    VkBuffer          buf;
+    VmaAllocation     alloc;
+    VmaAllocationInfo allocInfo;
+
+    VmaAllocator allocator_;
 
     impl(const impl&)            = delete;
     impl& operator=(const impl&) = delete;
 
   public:
-    impl(int size, bool write)
+    impl(int size, bool write, VmaAllocator allocator)
         : size_(size)
         , write_(write)
-    // , target_(!write ? GL_PIXEL_PACK_BUFFER : GL_PIXEL_UNPACK_BUFFER)
-    // , flags_(GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT | (write ? GL_MAP_WRITE_BIT : GL_MAP_READ_BIT))
+        , allocator_(allocator)
     {
-        // GL(glCreateBuffers(1, &id_));
-        // GL(glNamedBufferStorage(id_, size_, nullptr, flags_));
-        // data_ = GL2(glMapNamedBufferRange(id_, 0, size_, flags_));
+        VkBufferCreateInfo bufCreateInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        bufCreateInfo.size               = size;
+        bufCreateInfo.usage              = write ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT : VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+        VmaAllocationCreateInfo allocCreateInfo = {};
+        allocCreateInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
+        allocCreateInfo.flags =
+            write ? VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                        VMA_ALLOCATION_CREATE_MAPPED_BIT : VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                        VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+        vmaCreateBuffer(allocator_, &bufCreateInfo, &allocCreateInfo, &buf, &alloc, &allocInfo);
 
         (write ? g_w_total_count : g_r_total_count)++;
         (write ? g_w_total_size : g_r_total_size) += size_;
@@ -64,8 +80,7 @@ struct buffer::impl
 
     ~impl()
     {
-        // GL(glUnmapNamedBuffer(id_));
-        // glDeleteBuffers(1, &id_);
+        vmaDestroyBuffer(allocator_, buf, alloc);
 
         (write_ ? g_w_total_size : g_r_total_size) -= size_;
         (write_ ? g_w_total_count : g_r_total_count)--;
@@ -76,8 +91,8 @@ struct buffer::impl
     void unbind() { /*GL(glBindBuffer(target_, 0));*/ }
 };
 
-buffer::buffer(int size, bool write)
-    : impl_(new impl(size, write))
+buffer::buffer(int size, bool write, VmaAllocator allocator)
+    : impl_(new impl(size, write, allocator))
 {
 }
 buffer::buffer(buffer&& other)
@@ -90,12 +105,12 @@ buffer& buffer::operator=(buffer&& other)
     impl_ = std::move(other.impl_);
     return *this;
 }
-void* buffer::data() { return impl_->data_; }
+void* buffer::data() { return impl_->allocInfo.pMappedData; }
 bool  buffer::write() const { return impl_->write_; }
-int   buffer::size() const { return impl_->size_; }
+int   buffer::size() const { return static_cast<int>(impl_->allocInfo.size); }
 void  buffer::bind() { return impl_->bind(); }
 void  buffer::unbind() { return impl_->unbind(); }
-int   buffer::id() const { return impl_->id_; }
+VkBuffer buffer::id() const { return impl_->buf; }
 
 boost::property_tree::wptree buffer::info()
 {

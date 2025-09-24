@@ -295,10 +295,10 @@ struct image_kernel::impl
         //                 coords.data(),
         //                 GL_STATIC_DRAW));
 
-        auto stride = static_cast<GLsizei>(sizeof(core::frame_geometry::coord));
+        //auto stride = static_cast<GLsizei>(sizeof(core::frame_geometry::coord));
 
-        auto vtx_loc = shader_->get_attrib_location("Position");
-        auto tex_loc = shader_->get_attrib_location("TexCoordIn");
+        //auto vtx_loc = shader_->get_attrib_location("Position");
+        //auto tex_loc = shader_->get_attrib_location("TexCoordIn");
 
         // GL(glEnableVertexAttribArray(vtx_loc));
         // GL(glEnableVertexAttribArray(tex_loc));
@@ -321,8 +321,8 @@ struct image_kernel::impl
     }
 };
 
-image_kernel::image_kernel(const spl::shared_ptr<device>& ogl)
-    : impl_(new impl(ogl))
+image_kernel::image_kernel(const spl::shared_ptr<device>& device)
+    : impl_(new impl(device))
 {
 }
 image_kernel::~image_kernel() {}

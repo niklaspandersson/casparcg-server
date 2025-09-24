@@ -37,7 +37,10 @@ namespace caspar { namespace accelerator { namespace vulkan {
 
 struct texture::impl
 {
-    GLuint            id_     = 0;
+    vk::Image        image_;
+    vk::DeviceMemory  memory_;
+    vk::ImageView     imageView_;
+    vk::Device        device_;
     GLsizei           width_  = 0;
     GLsizei           height_ = 0;
     GLsizei           stride_ = 0;
@@ -48,8 +51,15 @@ struct texture::impl
     impl& operator=(const impl&) = delete;
 
   public:
-    impl(int width, int height, int stride, common::bit_depth depth)
-        : width_(width)
+    impl(int               width,
+         int               height,
+         int               stride,
+         common::bit_depth depth,
+         vk::Image         image,
+         vk::DeviceMemory  memory,
+         vk::ImageView     imageView,
+         vk::Device        device)
+        : image_(image), memory_(memory), imageView_(imageView), device_(device), width_(width)
         , height_(height)
         , stride_(stride)
         , depth_(depth)
@@ -64,7 +74,11 @@ struct texture::impl
         //     id_, 1, INTERNAL_FORMAT[depth_ == common::bit_depth::bit8 ? 0 : 1][stride_], width_, height_));
     }
 
-    ~impl() { /*glDeleteTextures(1, &id_);*/ }
+    ~impl() {
+        device_.destroyImageView(imageView_);
+        device_.freeMemory(memory_);
+        device_.destroyImage(image_);
+    }
 
     void bind() { /*GL(glBindTexture(GL_TEXTURE_2D, id_));*/ }
 
@@ -124,8 +138,15 @@ struct texture::impl
     }
 };
 
-texture::texture(int width, int height, int stride, common::bit_depth depth)
-    : impl_(new impl(width, height, stride, depth))
+texture::texture(int               width,
+                 int               height,
+                 int               stride,
+                 common::bit_depth depth,
+                 vk::Image         image,
+                 vk::DeviceMemory  memory,
+                 vk::ImageView     imageView,
+                 vk::Device device)
+    : impl_(new impl(width, height, stride, depth, image, memory, imageView, device))
 {
 }
 texture::texture(texture&& other)
@@ -153,6 +174,6 @@ int               texture::stride() const { return impl_->stride_; }
 common::bit_depth texture::depth() const { return impl_->depth_; }
 void              texture::set_depth(common::bit_depth depth) { impl_->depth_ = depth; }
 int               texture::size() const { return impl_->size_; }
-int               texture::id() const { return impl_->id_; }
+VkImage           texture::id() const { return impl_->image_; }
 
 }}} // namespace caspar::accelerator::vulkan

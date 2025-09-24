@@ -82,9 +82,13 @@ bin2c("vulkan/image/shader.frag" "vulkan_image_fragment.h" "caspar::accelerator:
 bin2c("ogl/image/shader.vert" "ogl_image_vertex.h" "caspar::accelerator::ogl" "vertex_shader")
 bin2c("ogl/image/shader.frag" "ogl_image_fragment.h" "caspar::accelerator::ogl" "fragment_shader")
 
+
 casparcg_add_library(accelerator SOURCES ${SOURCES} ${HEADERS})
 target_include_directories(accelerator PRIVATE .. ${CMAKE_CURRENT_BINARY_DIR})
 target_precompile_headers(accelerator PRIVATE StdAfx.h)
+
+# target_compile_definitions(accelerator PRIVATE VULKAN_HPP_NO_STRUCT_CONSTRUCTORS)
+
 target_link_libraries(accelerator PRIVATE common core vk-bootstrap::vk-bootstrap GPUOpen::VulkanMemoryAllocator Vulkan::Vulkan)
 
 if(NOT APPLE)
