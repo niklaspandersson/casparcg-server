@@ -49,6 +49,28 @@ namespace caspar { namespace accelerator { namespace vulkan {
 
 using namespace boost::asio;
 
+inline VKAPI_ATTR VkBool32 VKAPI_CALL default_debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+                                                             VkDebugUtilsMessageTypeFlagsEXT        messageType,
+                                                             const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+                                                             void*)
+{
+    auto ms = vkb::to_string_message_severity(messageSeverity);
+    auto mt = vkb::to_string_message_type(messageType);
+    if (messageType & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) {
+        CASPAR_LOG(info) << "[" << ms << ": " << mt << "] - " << pCallbackData->pMessageIdName << ", "
+                         << pCallbackData->pMessage;
+        //printf("[%s: %s] - %s\n%s\n", ms, mt, pCallbackData->pMessageIdName, pCallbackData->pMessage);
+    } else {
+        if (messageType & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) {
+            CASPAR_LOG(info) << "[" << ms << ": " << mt << "] " << pCallbackData->pMessage;
+            // printf("[%s: %s]\n%s\n", ms, mt, pCallbackData->pMessage);
+        }
+    }
+
+    return VK_FALSE; // Applications must return false here (Except Validation, if return true, will skip calling to
+                     // driver)
+}
+
 struct device::impl : public std::enable_shared_from_this<impl>
 {
     using texture_queue_t = tbb::concurrent_bounded_queue<std::shared_ptr<texture>>;
@@ -60,6 +82,8 @@ struct device::impl : public std::enable_shared_from_this<impl>
     std::wstring version_;
 
     vk::Device _device;
+    vk::Queue  _queue;
+    vk::CommandPool _command_pool;
 
     io_context                             io_context_;
     decltype(make_work_guard(io_context_)) work_;
@@ -70,12 +94,20 @@ struct device::impl : public std::enable_shared_from_this<impl>
     {
         CASPAR_LOG(info) << L"Initializing (noop) Vulkan Device.";
 
+        // auto pDebugFn = debug_callback;
+
         auto instance_builder = vkb::InstanceBuilder()
+                                    .enable_validation_layers(true)
                                     .set_app_name("CasparCG")
-                                    .use_default_debug_messenger()
+                                    .set_headless(true)
+                                    .set_debug_messenger_severity(VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                                                  VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+                                    .set_debug_messenger_type(VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | 
+                                                              VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                                                              VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT)
+                                    .set_debug_callback(default_debug_callback)
                                     .set_engine_name("CasparCG")
-                                    .require_api_version(VK_API_VERSION_1_3)
-                                    .request_validation_layers(true);
+                                    .require_api_version(VK_API_VERSION_1_3);
         auto instance_ret = instance_builder.build();
         if (!instance_ret) {
             CASPAR_THROW_EXCEPTION(caspar_exception()
@@ -86,7 +118,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
         // Find suitable physical device
         auto gpu_selector = vkb::PhysicalDeviceSelector(vkb_instance);
 
-        auto gpu_res = gpu_selector.defer_surface_initialization().set_minimum_version(1, 3).select();
+        auto gpu_res = gpu_selector.set_minimum_version(1, 3).select();
         if (!gpu_res) {
             CASPAR_THROW_EXCEPTION(caspar_exception()
                                    << msg_info("Failed to select physical device: " + gpu_res.error().message()));
@@ -103,7 +135,17 @@ struct device::impl : public std::enable_shared_from_this<impl>
         }
         auto vkb_device = device_res.value();
         _device         = vk::Device(vkb_device.device);
+        _queue  = vk::Queue(vkb_device.get_queue(vkb::QueueType::graphics).value());
+        auto queue_family = vkb_device.get_queue_index(vkb::QueueType::graphics).value();
 
+        vk::CommandPoolCreateInfo pool_info;
+        pool_info.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+        pool_info.queueFamilyIndex = queue_family;
+
+        _command_pool = _device.createCommandPool(pool_info);
+
+        //vk::Framebuffer fb;
+        //commandbuffers[0].beginRenderPass
         thread_ = std::thread([&] {
             set_thread_name(L"Vulkan Device");
             io_context_.run();
@@ -142,6 +184,35 @@ struct device::impl : public std::enable_shared_from_this<impl>
 #endif
         );
         return future;
+    }
+
+    template <typename Func>
+    void submit_render_pass(vk::ImageView attachment_image_view, Func&& func)
+    {
+        dispatch_async([=] {
+            auto cmd_buffer = _device.allocateCommandBuffers(
+                vk::CommandBufferAllocateInfo(_command_pool, vk::CommandBufferLevel::ePrimary, 1))[0];
+            cmd_buffer.begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+
+            vk::RenderingInfo rendering_info;
+
+            vk::RenderingAttachmentInfo attachment_info;
+            attachment_info.resolveMode = vk::ResolveModeFlagBits::eNone;
+            attachment_info.loadOp      = vk::AttachmentLoadOp::eLoad;
+            attachment_info.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+            attachment_info.storeOp     = vk::AttachmentStoreOp::eStore;
+            attachment_info.imageView   = attachment_image_view; // TODO
+            rendering_info.setColorAttachments(attachment_info);
+            
+            cmd_buffer.beginRendering(rendering_info);
+            func(cmd_buffer, _device);
+            cmd_buffer.endRendering();
+            cmd_buffer.end();
+
+            vk::SubmitInfo2 submit_info;
+            submit_info.setCommandBufferInfos(vk::CommandBufferSubmitInfo().setCommandBuffer(cmd_buffer));
+            _queue.submit2(submit_info);
+        });
     }
 
     template <typename Func>

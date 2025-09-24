@@ -151,6 +151,20 @@ target_link_directories(GLEW::glew INTERFACE ${glew_SOURCE_DIR}/lib/Release/x64)
 target_link_libraries(GLEW::glew INTERFACE glew32)
 casparcg_add_runtime_dependency("${glew_SOURCE_DIR}/bin/Release/x64/glew32.dll")
 
+FetchContent_Declare(fetch_vk_bootstrap
+    GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap
+    GIT_TAG        v1.4.321 #suggest using a tag so the library doesn't update whenever new commits are pushed to a branch
+    )
+FetchContent_MakeAvailable(fetch_vk_bootstrap)
+
+find_package(Vulkan REQUIRED)
+
+FetchContent_Declare(fetch_vma
+    GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+    GIT_TAG        v3.3.0 #suggest using a tag so the library doesn't update whenever new commits are pushed to a branch
+)
+FetchContent_MakeAvailable(fetch_vma)
+
 find_package(Vulkan REQUIRED)
 
 # SFML
