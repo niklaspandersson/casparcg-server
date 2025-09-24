@@ -24,6 +24,8 @@
 #include <boost/property_tree/ptree_fwd.hpp>
 #include <memory>
 
+#include <vk_mem_alloc.h>
+
 namespace caspar { namespace accelerator { namespace vulkan {
 
 class buffer final
@@ -31,7 +33,7 @@ class buffer final
   public:
     static boost::property_tree::wptree info();
 
-    buffer(int size, bool write);
+    buffer(int size, bool write, VmaAllocator allocator);
     buffer(const buffer&) = delete;
     buffer(buffer&& other);
     ~buffer();
@@ -42,7 +44,7 @@ class buffer final
     void bind();
     void unbind();
 
-    int   id() const;
+    VkBuffer   id() const;
     void* data();
     int   size() const;
     bool  write() const;

@@ -33,6 +33,14 @@
 #include <VkBootstrap.h>
 #include <vulkan/vulkan.hpp>
 
+#define VMA_STATIC_VULKAN_FUNCTIONS 0
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
+#define VMA_IMPLEMENTATION
+#pragma warning(push)
+#pragma warning(disable : 4189)
+#include <vk_mem_alloc.h>
+#pragma warning(pop)
+
 #include <boost/asio/deadline_timer.hpp>
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/spawn.hpp>
@@ -49,6 +57,94 @@ namespace caspar { namespace accelerator { namespace vulkan {
 
 using namespace boost::asio;
 
+inline VKAPI_ATTR VkBool32 VKAPI_CALL default_debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+                                                             VkDebugUtilsMessageTypeFlagsEXT        messageType,
+                                                             const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+                                                             void*)
+{
+    auto ms = vkb::to_string_message_severity(messageSeverity);
+    auto mt = vkb::to_string_message_type(messageType);
+    if (messageType & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) {
+        CASPAR_LOG(info) << "[" << ms << ": " << mt << "] - " << pCallbackData->pMessageIdName << ", "
+                         << pCallbackData->pMessage;
+        //printf("[%s: %s] - %s\n%s\n", ms, mt, pCallbackData->pMessageIdName, pCallbackData->pMessage);
+    } else {
+        if (messageType & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) {
+            CASPAR_LOG(info) << "[" << ms << ": " << mt << "] " << pCallbackData->pMessage;
+            // printf("[%s: %s]\n%s\n", ms, mt, pCallbackData->pMessage);
+        }
+    }
+
+    return VK_FALSE; // Applications must return false here (Except Validation, if return true, will skip calling to
+                     // driver)
+}
+
+void transitionImageLayout(const vk::Image&  image,
+                           vk::Format        format,
+                           vk::ImageLayout   oldLayout,
+                           vk::AccessFlags2   srcAccessMask,
+                           vk::PipelineStageFlags2 srcStage,
+                           vk::ImageLayout   newLayout,
+                           vk::AccessFlags2        dstAccessMask,
+                           vk::PipelineStageFlags2 dstStage,
+                           vk::CommandBuffer cmdBuffer)
+{
+    vk::PipelineStageFlags2 sourceStage;
+    vk::PipelineStageFlags2 destinationStage;
+
+    auto range = vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+
+    vk::ImageMemoryBarrier2 barrier{};
+    barrier.oldLayout = oldLayout, barrier.newLayout = newLayout, barrier.srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+    barrier.dstQueueFamilyIndex = vk::QueueFamilyIgnored, barrier.image = image,
+    barrier.subresourceRange = range;
+    
+    barrier.srcAccessMask = srcAccessMask;
+    barrier.srcStageMask    = srcStage;
+
+    barrier.dstAccessMask = dstAccessMask;
+    barrier.dstStageMask = dstStage;
+
+    vk::DependencyInfo dep_info;
+    dep_info.setImageMemoryBarriers(barrier);
+
+    cmdBuffer.pipelineBarrier2(dep_info);
+}
+
+void submitSingleTimeCommands(vk::Device                                    device,
+                              vk::CommandPool                               commandPool,
+                              vk::Queue                                     queue,
+                              std::function<void(const vk::CommandBuffer&)> func,
+                              vk::Fence* pFence = nullptr)
+{
+    vk::CommandBufferAllocateInfo allocInfo     = {};
+    allocInfo.commandPool = commandPool, allocInfo.level = vk::CommandBufferLevel::ePrimary,
+    allocInfo.commandBufferCount = 1;
+    auto commandBuffer = device.allocateCommandBuffers(allocInfo)[0];
+
+    vk::CommandBufferBeginInfo beginInfo = {};
+    beginInfo.flags                      = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+
+    commandBuffer.begin(beginInfo);
+
+    func(commandBuffer);
+
+    commandBuffer.end();
+
+    vk::SubmitInfo submitInfo = {};
+
+    submitInfo.setCommandBuffers(commandBuffer);
+
+    if (pFence)
+        queue.submit(submitInfo, *pFence);
+    else
+        queue.submit(submitInfo);
+
+    queue.waitIdle();
+
+    device.freeCommandBuffers(commandPool, commandBuffer);
+}
+
 struct device::impl : public std::enable_shared_from_this<impl>
 {
     using texture_queue_t = tbb::concurrent_bounded_queue<std::shared_ptr<texture>>;
@@ -59,7 +155,13 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
     std::wstring version_;
 
+    vkb::Instance   _vkb_instance;
+    vkb::PhysicalDevice _vkb_physical_device;
+    vk::PhysicalDevice  _physical_device;
     vk::Device _device;
+    vk::Queue  _queue;
+    vk::CommandPool _command_pool;
+    VmaAllocator    _allocator;
 
     io_context                             io_context_;
     decltype(make_work_guard(io_context_)) work_;
@@ -70,31 +172,44 @@ struct device::impl : public std::enable_shared_from_this<impl>
     {
         CASPAR_LOG(info) << L"Initializing (noop) Vulkan Device.";
 
+        // auto pDebugFn = debug_callback;
+
         auto instance_builder = vkb::InstanceBuilder()
+                                    .enable_validation_layers(true)
                                     .set_app_name("CasparCG")
-                                    .use_default_debug_messenger()
+                                    .set_headless(true)
+                                    .set_debug_messenger_severity(VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                                                  VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+                                    .set_debug_messenger_type(VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | 
+                                                              VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                                                              VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT)
+                                    .set_debug_callback(default_debug_callback)
                                     .set_engine_name("CasparCG")
-                                    .require_api_version(VK_API_VERSION_1_3)
-                                    .request_validation_layers(true);
+                                    .require_api_version(VK_API_VERSION_1_3);
         auto instance_ret = instance_builder.build();
         if (!instance_ret) {
             CASPAR_THROW_EXCEPTION(caspar_exception()
                                    << msg_info("Failed to create Vulkan instance: " + instance_ret.error().message()));
         }
-        auto vkb_instance = instance_ret.value();
+        _vkb_instance = instance_ret.value();
 
         // Find suitable physical device
-        auto gpu_selector = vkb::PhysicalDeviceSelector(vkb_instance);
+        auto gpu_selector = vkb::PhysicalDeviceSelector(_vkb_instance);
 
-        auto gpu_res = gpu_selector.defer_surface_initialization().set_minimum_version(1, 3).select();
+        vk::PhysicalDeviceVulkan13Features features;
+        features.dynamicRendering = true;
+        features.synchronization2 = true;
+
+        auto gpu_res = gpu_selector.set_minimum_version(1, 3).set_required_features_13(features).select();
         if (!gpu_res) {
             CASPAR_THROW_EXCEPTION(caspar_exception()
                                    << msg_info("Failed to select physical device: " + gpu_res.error().message()));
         }
-        auto vkb_gpu = gpu_res.value();
+        _vkb_physical_device = gpu_res.value();
 
         // Create the logical device
-        auto device_builder = vkb::DeviceBuilder(vkb_gpu);
+        auto device_builder = vkb::DeviceBuilder(_vkb_physical_device);
+        _physical_device    = vk::PhysicalDevice(_vkb_physical_device.physical_device);
 
         auto device_res = device_builder.build();
         if (!device_res) {
@@ -103,6 +218,29 @@ struct device::impl : public std::enable_shared_from_this<impl>
         }
         auto vkb_device = device_res.value();
         _device         = vk::Device(vkb_device.device);
+        _queue  = vk::Queue(vkb_device.get_queue(vkb::QueueType::graphics).value());
+        auto queue_family = vkb_device.get_queue_index(vkb::QueueType::graphics).value();
+
+        vk::CommandPoolCreateInfo pool_info;
+        pool_info.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+        pool_info.queueFamilyIndex = queue_family;
+
+        _command_pool = _device.createCommandPool(pool_info);
+
+        VmaVulkanFunctions vulkanFunctions    = {};
+        vulkanFunctions.vkGetInstanceProcAddr = &vkGetInstanceProcAddr;
+        vulkanFunctions.vkGetDeviceProcAddr   = &vkGetDeviceProcAddr;
+
+        VmaAllocatorCreateInfo allocatorCreateInfo = {};
+        allocatorCreateInfo.flags                  = VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+        allocatorCreateInfo.vulkanApiVersion       = VK_API_VERSION_1_2;
+        allocatorCreateInfo.physicalDevice         = _physical_device;
+        allocatorCreateInfo.device                 = _device;
+        allocatorCreateInfo.instance               = _vkb_instance.instance;
+        allocatorCreateInfo.pVulkanFunctions       = &vulkanFunctions;
+
+
+        vmaCreateAllocator(&allocatorCreateInfo, &_allocator);
 
         thread_ = std::thread([&] {
             set_thread_name(L"Vulkan Device");
@@ -145,6 +283,35 @@ struct device::impl : public std::enable_shared_from_this<impl>
     }
 
     template <typename Func>
+    void submit_render_pass(vk::ImageView attachment_image_view, Func&& func)
+    {
+        dispatch_async([=] {
+            auto cmd_buffer = _device.allocateCommandBuffers(
+                vk::CommandBufferAllocateInfo(_command_pool, vk::CommandBufferLevel::ePrimary, 1))[0];
+            cmd_buffer.begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+
+            vk::RenderingInfo rendering_info;
+
+            vk::RenderingAttachmentInfo attachment_info;
+            attachment_info.resolveMode = vk::ResolveModeFlagBits::eNone;
+            attachment_info.loadOp      = vk::AttachmentLoadOp::eLoad;
+            attachment_info.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+            attachment_info.storeOp     = vk::AttachmentStoreOp::eStore;
+            attachment_info.imageView   = attachment_image_view; // TODO
+            rendering_info.setColorAttachments(attachment_info);
+            
+            cmd_buffer.beginRendering(rendering_info);
+            func(cmd_buffer, _device);
+            cmd_buffer.endRendering();
+            cmd_buffer.end();
+
+            vk::SubmitInfo2 submit_info;
+            submit_info.setCommandBufferInfos(vk::CommandBufferSubmitInfo().setCommandBuffer(cmd_buffer));
+            _queue.submit2(submit_info);
+        });
+    }
+
+    template <typename Func>
     auto dispatch_async(Func&& func)
     {
         using result_type = decltype(func());
@@ -164,19 +331,90 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
     std::wstring version() { return version_; }
 
+    uint32_t findDedicatedMemoryType(uint32_t typeMask, vk::MemoryPropertyFlags properties)
+    {
+        auto memProperties = _physical_device.getMemoryProperties();
+        for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i) {
+            if ((typeMask & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags == properties)) {
+                return i;
+            }
+        }
+        throw std::runtime_error("Failed to find suitable memory type");
+    }
+
+
     std::shared_ptr<texture> create_texture(int width, int height, int stride, common::bit_depth depth, bool clear)
     {
         CASPAR_VERIFY(stride > 0 && stride < 5);
         CASPAR_VERIFY(width > 0 && height > 0);
 
         auto depth_pool_index = depth == common::bit_depth::bit8 ? 0 : 1;
+        auto format = depth == common::bit_depth::bit8 ? vk::Format::eR8G8B8A8Uint : vk::Format::eR16G16B16A16Uint;
 
         // TODO (perf) Shared pool.
         auto pool = &device_pools_[depth_pool_index][stride - 1][(width << 16 & 0xFFFF0000) | (height & 0x0000FFFF)];
-
+        auto extent = vk::Extent3D{static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
         std::shared_ptr<texture> tex;
         if (!pool->try_pop(tex)) {
-            tex = std::make_shared<texture>(width, height, stride, depth);
+            vk::ImageCreateInfo imageInfo{};
+            imageInfo.imageType = vk::ImageType::e2D;
+            imageInfo.format    = format;
+            imageInfo.extent      = extent;
+            imageInfo.mipLevels   = 1;
+            imageInfo.arrayLayers = 1;
+            imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+            imageInfo.samples     = vk::SampleCountFlagBits::e1;
+            imageInfo.tiling      = vk::ImageTiling::eOptimal;
+            imageInfo.usage       = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
+                              vk::ImageUsageFlagBits::eSampled;
+            imageInfo.sharingMode = vk::SharingMode::eExclusive;
+            auto image = _device.createImage(imageInfo);
+
+            auto memReq = _device.getImageMemoryRequirements(image);
+
+            vk::MemoryAllocateInfo allocInfo{};
+            allocInfo.allocationSize = memReq.size;
+            allocInfo.memoryTypeIndex = findDedicatedMemoryType(memReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+            auto imageMemory = _device.allocateMemory(allocInfo);
+            _device.bindImageMemory(image, imageMemory, 0);
+            auto clearValue = vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
+            auto range      = vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+
+            vk::ImageViewCreateInfo createInfo({},
+                image,
+                vk::ImageViewType::e2D,
+                format,
+                vk::ComponentMapping(),
+                range);
+
+            auto imageView = _device.createImageView(createInfo);
+
+            //submitSingleTimeCommands(_device, _command_pool, _queue, [&](vk::CommandBuffer cmd) {
+            //    transitionImageLayout(image,
+            //                          format,
+            //                          vk::ImageLayout::eUndefined,
+            //                          vk::AccessFlagBits2::eNone,
+            //                          vk::PipelineStageFlagBits2::eTopOfPipe,
+
+            //                          vk::ImageLayout::eTransferDstOptimal,
+            //                          vk::AccessFlagBits2::eMemoryWrite,
+            //                          vk::PipelineStageFlagBits2::eClear,
+            //                          cmd);
+            //    cmd.clearColorImage(image, vk::ImageLayout::eTransferDstOptimal, clearValue, range);
+            //    transitionImageLayout(
+            //        image, format,
+            //        vk::ImageLayout::eTransferDstOptimal,
+            //        vk::AccessFlagBits2::eMemoryWrite,
+            //        vk::PipelineStageFlagBits2::eClear,
+
+            //        vk::ImageLayout::eShaderReadOnlyOptimal,
+            //        vk::AccessFlagBits2::eShaderRead,
+            //        vk::PipelineStageFlagBits2::eFragmentShader,
+            //        cmd);
+            //});
+
+            tex = std::make_shared<texture>(width, height, stride, depth, image, imageMemory, imageView, _device);
         }
         tex->set_depth(depth);
 
@@ -199,7 +437,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
         std::shared_ptr<buffer> buf;
         if (!pool->try_pop(buf)) {
             // TODO (perf) Avoid blocking in create_array.
-            dispatch_sync([&] { buf = std::make_shared<buffer>(size, write); });
+            buf = std::make_shared<buffer>(size, write, _allocator);
         }
 
         auto ptr = buf.get();
@@ -244,9 +482,35 @@ struct device::impl : public std::enable_shared_from_this<impl>
             auto buf = create_buffer(source->size(), false);
             source->copy_to(*buf);
 
-            // auto fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+            vk::CopyImageToBufferInfo2 copyInfo{};
+            copyInfo.dstBuffer = buf->id();
+            copyInfo.srcImage  = source->id();
+            copyInfo.srcImageLayout = vk::ImageLayout::eTransferSrcOptimal;
 
-            // GL(glFlush());
+            vk::BufferImageCopy2 region{};
+            region.bufferOffset = 0;
+            region.imageSubresource = vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1);
+            region.imageOffset  = vk::Offset3D{0, 0, 0};
+            region.imageExtent =
+                vk::Extent3D{static_cast<uint32_t>(source->width()), static_cast<uint32_t>(source->height()), 1};
+            copyInfo.setRegions(region);
+
+            auto fence = _device.createFence(vk::FenceCreateInfo());
+
+             submitSingleTimeCommands(_device, _command_pool, _queue, [&](vk::CommandBuffer cmd) {
+                transitionImageLayout(source->id(),
+                                      vk::Format::eR8G8B8A8Uint,
+                                       vk::ImageLayout::eUndefined,
+                                       vk::AccessFlagBits2::eNone,
+                                       vk::PipelineStageFlagBits2::eTopOfPipe,
+
+                                      vk::ImageLayout::eTransferSrcOptimal,
+                                      vk::AccessFlagBits2::eHostRead,
+                                      vk::PipelineStageFlagBits2::eHost,
+                                      cmd);
+                cmd.copyImageToBuffer2(copyInfo);
+            }, &fence);
+
 
             deadline_timer timer(io_context_);
             for (auto n = 0; true; ++n) {
@@ -254,13 +518,13 @@ struct device::impl : public std::enable_shared_from_this<impl>
                 timer.expires_from_now(boost::posix_time::milliseconds(2));
                 timer.async_wait(yield);
 
-                // auto wait = glClientWaitSync(fence, 0, 1);
-                // if (wait == GL_ALREADY_SIGNALED || wait == GL_CONDITION_SATISFIED) {
-                //     break;
-                // }
+                auto wait = _device.waitForFences(fence, VK_TRUE, 0);
+                if (wait == vk::Result::eSuccess) {
+                    break;
+                }
             }
 
-            // glDeleteSync(fence);
+            _device.destroyFence(fence);
 
             auto ptr  = reinterpret_cast<uint8_t*>(buf->data());
             auto size = buf->size();
