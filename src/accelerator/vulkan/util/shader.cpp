@@ -19,14 +19,40 @@
  * Author: Robert Nagy, ronag89@gmail.com
  */
 #include "shader.h"
-
-// #include <common/gl/gl_check.h>
+#include "vulkan_image_fragment.h"
+#include "vulkan_image_vertex.h"
 
 #include <vulkan/vulkan.hpp>
 
 #include <unordered_map>
 
 namespace caspar { namespace accelerator { namespace vulkan {
+
+std::vector<vk::PipelineShaderStageCreateInfo> create_shader_program(vk::Device device)
+{
+    // Helper to create shader module
+    auto createShaderModule = [&](const uint8_t* code, size_t size) {
+        vk::ShaderModuleCreateInfo createInfo{};
+        createInfo.codeSize = size;
+        createInfo.pCode    = reinterpret_cast<const uint32_t*>(code);
+        return device.createShaderModule(createInfo);
+    };
+
+    auto vertShaderModule = createShaderModule(vertex_shader, sizeof(vertex_shader));
+    auto fragShaderModule = createShaderModule(fragment_shader, sizeof(fragment_shader));
+
+    vk::PipelineShaderStageCreateInfo vertShaderStageInfo;
+    vertShaderStageInfo.stage  = vk::ShaderStageFlagBits::eVertex;
+    vertShaderStageInfo.module = vertShaderModule;
+    vertShaderStageInfo.pName  = "main";
+
+    vk::PipelineShaderStageCreateInfo fragShaderStageInfo;
+    fragShaderStageInfo.stage  = vk::ShaderStageFlagBits::eFragment;
+    fragShaderStageInfo.module = fragShaderModule;
+    fragShaderStageInfo.pName  = "main";
+
+    return {vertShaderStageInfo, fragShaderStageInfo};
+}
 
 struct shader::impl
 {
@@ -41,62 +67,6 @@ struct shader::impl
     impl(const std::string& vertex_source_str, const std::string& fragment_source_str)
         : program_(0)
     {
-        // GLint success;
-
-        // const char* vertex_source = vertex_source_str.c_str();
-
-        // auto vertex_shader = glCreateShaderObjectARB(GL_VERTEX_SHADER_ARB);
-
-        // GL(glShaderSourceARB(vertex_shader, 1, &vertex_source, NULL));
-        // GL(glCompileShaderARB(vertex_shader));
-
-        // GL(glGetObjectParameterivARB(vertex_shader, GL_OBJECT_COMPILE_STATUS_ARB, &success));
-        // if (success == GL_FALSE) {
-        //     char info[2048];
-        //     GL(glGetInfoLogARB(vertex_shader, sizeof(info), 0, info));
-        //     GL(glDeleteObjectARB(vertex_shader));
-        //     std::stringstream str;
-        //     str << "Failed to compile vertex shader:" << std::endl << info << std::endl;
-        //     CASPAR_THROW_EXCEPTION(caspar_exception() << msg_info(str.str()));
-        // }
-
-        // const char* fragment_source = fragment_source_str.c_str();
-
-        // auto fragmemt_shader = glCreateShaderObjectARB(GL_FRAGMENT_SHADER_ARB);
-
-        // GL(glShaderSourceARB(fragmemt_shader, 1, &fragment_source, NULL));
-        // GL(glCompileShaderARB(fragmemt_shader));
-
-        // GL(glGetObjectParameterivARB(fragmemt_shader, GL_OBJECT_COMPILE_STATUS_ARB, &success));
-        // if (success == GL_FALSE) {
-        //     char info[2048];
-        //     GL(glGetInfoLogARB(fragmemt_shader, sizeof(info), 0, info));
-        //     GL(glDeleteObjectARB(fragmemt_shader));
-        //     std::stringstream str;
-        //     str << "Failed to compile fragment shader:" << std::endl << info << std::endl;
-        //     CASPAR_THROW_EXCEPTION(caspar_exception() << msg_info(str.str()));
-        // }
-
-        // program_ = glCreateProgramObjectARB();
-
-        // GL(glAttachObjectARB(program_, vertex_shader));
-        // GL(glAttachObjectARB(program_, fragmemt_shader));
-
-        // GL(glLinkProgramARB(program_));
-
-        // GL(glDeleteObjectARB(vertex_shader));
-        // GL(glDeleteObjectARB(fragmemt_shader));
-
-        // GL(glGetObjectParameterivARB(program_, GL_OBJECT_LINK_STATUS_ARB, &success));
-        // if (success == GL_FALSE) {
-        //     char info[2048];
-        //     GL(glGetInfoLogARB(program_, sizeof(info), 0, info));
-        //     GL(glDeleteObjectARB(program_));
-        //     std::stringstream str;
-        //     str << "Failed to link shader program:" << std::endl << info << std::endl;
-        //     CASPAR_THROW_EXCEPTION(caspar_exception() << msg_info(str.str()));
-        // }
-        // GL(glUseProgramObjectARB(program_));
     }
 
     ~impl() { /*glDeleteProgram(program_);*/ }

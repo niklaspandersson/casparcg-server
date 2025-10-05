@@ -76,8 +76,8 @@ else()
 	)
 endif()
 
-bin2c("vulkan/image/shader.vert" "vulkan_image_vertex.h" "caspar::accelerator::vulkan" "vertex_shader")
-bin2c("vulkan/image/shader.frag" "vulkan_image_fragment.h" "caspar::accelerator::vulkan" "fragment_shader")
+bin2c("vulkan/image/vertex.spv" "vulkan_image_vertex.h" "caspar::accelerator::vulkan" "vertex_shader")
+bin2c("vulkan/image/fragment.spv" "vulkan_image_fragment.h" "caspar::accelerator::vulkan" "fragment_shader")
 
 bin2c("ogl/image/shader.vert" "ogl_image_vertex.h" "caspar::accelerator::ogl" "vertex_shader")
 bin2c("ogl/image/shader.frag" "ogl_image_fragment.h" "caspar::accelerator::ogl" "fragment_shader")

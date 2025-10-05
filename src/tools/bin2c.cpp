@@ -25,7 +25,7 @@ int main(int argc, char** argv)
         count++;
     }
 
-    printf("const char %s[] = {\n", argv[2]);
+    printf("const uint8_t %s[] = {\n", argv[2]);
     unsigned long n = 0;
     while (!feof(f)) {
         unsigned char c;

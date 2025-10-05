@@ -1,9 +1,9 @@
 #version 450
-in vec4 TexCoordIn;
-in vec2 Position;
+layout(location = 0) in vec4 TexCoordIn;
+layout(location = 1) in vec2 Position;
 
-out vec4 TexCoord;
-out vec4 TexCoord2;
+layout(location = 0) out vec4 TexCoord;
+layout(location = 1) out vec4 TexCoord2;
 
 void main()
 {

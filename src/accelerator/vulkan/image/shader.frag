@@ -1,47 +1,78 @@
+
 #version 450
-in vec4 TexCoord;
-in vec4 TexCoord2;
-out vec4 fragColor;
+layout(location = 0) in vec4 TexCoord;
+layout(location = 1) in vec4 TexCoord2;
 
-uniform sampler2D	background;
-uniform sampler2D	plane[4];
-uniform sampler2D	local_key;
-uniform sampler2D	layer_key;
+layout(location = 0) out vec4 fragColor;
 
-uniform bool        is_straight_alpha;
+layout(binding = 1) uniform sampler2D	background;
+layout(binding = 2) uniform sampler2D	plane[4];
+layout(binding = 3) uniform sampler2D	local_key;
+layout(binding = 4) uniform sampler2D	layer_key;
 
-uniform mat3		color_matrix;
-uniform vec3		luma_coeff;
-uniform bool		has_local_key;
-uniform bool		has_layer_key;
-uniform int			blend_mode;
-uniform int			keyer;
-uniform int			pixel_format;
+const uint is_straight_alpha_mask = 1u << 0;
+const uint has_local_key_mask = 1u << 1;
+const uint has_layer_key_mask = 1u << 2;
+const uint invert_mask = 1u << 3;
+const uint levels_mask = 1u << 4;
+const uint csb_mask = 1u << 5;
+const uint chroma_mask = 1u << 6;
+const uint chroma_show_mask_mask = 1u << 7;
 
-uniform bool        invert;
-uniform float		opacity;
-uniform bool		levels;
-uniform float		min_input;
-uniform float		max_input;
-uniform float		gamma;
-uniform float		min_output;
-uniform float		max_output;
-uniform float	    precision_factor[4];
+layout(binding = 0) uniform ParamsBlock {
+    uint color_space_index;
+    float precision_factor[4];
+    int blend_mode;
+    int keyer;
+    int pixel_format;
+    float opacity;
 
-uniform bool		csb;
-uniform float		brt;
-uniform float		sat;
-uniform float		con;
+/* levels */
+    float min_input;
+    float max_input;
+    float gamma;
+    float min_output;
+    float max_output;
+    
+/* contrast, saturation & brightness */
+    float brt;
+    float sat;
+    float con;
 
-uniform bool		chroma;
-uniform bool		chroma_show_mask;
-uniform float		chroma_target_hue;
-uniform float		chroma_hue_width;
-uniform float		chroma_min_saturation;
-uniform float		chroma_min_brightness;
-uniform float		chroma_softness;
-uniform float		chroma_spill_suppress;
-uniform float		chroma_spill_suppress_saturation;
+/* Chroma */
+    float chroma_target_hue;
+    float chroma_hue_width;
+    float chroma_min_saturation;
+    float chroma_min_brightness;
+    float chroma_softness;
+    float chroma_spill_suppress;
+    float chroma_spill_suppress_saturation;
+
+    uint flags;
+};
+
+bool is_straight_alpha = (flags & is_straight_alpha_mask) == is_straight_alpha_mask;
+bool has_local_key = (flags & has_local_key_mask) == has_local_key_mask;
+bool has_layer_key  = (flags & has_layer_key_mask) == has_layer_key_mask;
+bool invert = (flags & invert_mask) == invert_mask;
+bool levels = (flags & levels_mask) == levels_mask;
+bool csb = (flags & csb_mask) == csb_mask;
+bool chroma = (flags & chroma_mask) == chroma_mask;
+bool chroma_show_mask = (flags & chroma_show_mask_mask) == chroma_show_mask_mask;
+
+const mat3[3] color_matrices = mat3[3](
+                    mat3(1.0, 0.0, 1.402, 1.0, -0.344, -0.509, 1.0, 1.772, 0.0),
+                    mat3(1.0, 0.0, 1.5748, 1.0, -0.1873, -0.4681, 1.0, 1.8556, 0.0),
+                    mat3(1.0, 0.0, 1.4746, 1.0, -0.16455312684366, -0.57135312684366, 1.0, 1.8814, 0.0)
+                ); 
+const vec3[3] luma_coefficients = vec3[3](
+                    vec3(0.299, 0.587, 0.114), // Rec. 709
+                    vec3(0.2126, 0.7152, 0.0722),  // Rec. 601
+                    vec3(0.2627, 0.6780, 0.0593)   // Rec. 2020
+                );
+
+mat3 color_matrix = color_matrices[color_space_index];
+vec3 luma_coeff = luma_coefficients[color_space_index];
 
 /*
 ** Contrast, saturation, brightness
@@ -450,9 +481,9 @@ vec4 ycbcra_to_rgba(float Y, float Cb, float Cr, float A)
     return vec4(color_matrix * YCbCr / 255, A).bgra;
 }
 
-vec4 get_sample(sampler2D sampler, vec2 coords)
+vec4 get_sample(sampler2D texSampler, vec2 coords)
 {
-    return texture(sampler, coords);
+    return texture(texSampler, coords);
 }
 
 vec4 get_rgba_color()

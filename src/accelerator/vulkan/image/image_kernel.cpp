@@ -85,9 +85,9 @@ struct image_kernel::impl
     GLuint                  vao_;
     GLuint                  vbo_;
 
-    explicit impl(const spl::shared_ptr<device>& ogl)
-        : vulkan_(ogl)
-        , shader_(vulkan_->dispatch_sync([&] { return get_image_shader(ogl); }))
+    explicit impl(const spl::shared_ptr<device>& vulkan)
+        : vulkan_(vulkan)
+        , shader_(vulkan_->dispatch_sync([&] { return get_image_shader(vulkan); }))
     {
         vulkan_->dispatch_sync([&] {
             // GL(glGenVertexArrays(1, &vao_));
@@ -295,10 +295,10 @@ struct image_kernel::impl
         //                 coords.data(),
         //                 GL_STATIC_DRAW));
 
-        //auto stride = static_cast<GLsizei>(sizeof(core::frame_geometry::coord));
+        // auto stride = static_cast<GLsizei>(sizeof(core::frame_geometry::coord));
 
-        //auto vtx_loc = shader_->get_attrib_location("Position");
-        //auto tex_loc = shader_->get_attrib_location("TexCoordIn");
+        // auto vtx_loc = shader_->get_attrib_location("Position");
+        // auto tex_loc = shader_->get_attrib_location("TexCoordIn");
 
         // GL(glEnableVertexAttribArray(vtx_loc));
         // GL(glEnableVertexAttribArray(tex_loc));
