@@ -20,10 +20,8 @@
  */
 #include "image_kernel.h"
 
-#include "image_shader.h"
-
 #include "../util/device.h"
-#include "../util/shader.h"
+#include "../util/pipeline.h"
 #include "../util/texture.h"
 
 #include <common/assert.h>
@@ -81,13 +79,9 @@ static const double epsilon = 0.001;
 struct image_kernel::impl
 {
     spl::shared_ptr<device> vulkan_;
-    spl::shared_ptr<shader> shader_;
-    GLuint                  vao_;
-    GLuint                  vbo_;
 
     explicit impl(const spl::shared_ptr<device>& vulkan)
         : vulkan_(vulkan)
-        , shader_(vulkan_->dispatch_sync([&] { return get_image_shader(vulkan); }))
     {
         vulkan_->dispatch_sync([&] {
             // GL(glGenVertexArrays(1, &vao_));
@@ -180,11 +174,11 @@ struct image_kernel::impl
         }
 
         if (params.local_key) {
-            params.local_key->bind(static_cast<int>(texture_id::local_key));
+            // params.local_key->bind(static_cast<int>(texture_id::local_key));
         }
 
         if (params.layer_key) {
-            params.layer_key->bind(static_cast<int>(texture_id::layer_key));
+            // params.layer_key->bind(static_cast<int>(texture_id::layer_key));
         }
 
         const auto is_hd       = params.pix_desc.planes.at(0).height > 700;
@@ -202,39 +196,39 @@ struct image_kernel::impl
         const auto  luma_coeff              = luma_coefficients[static_cast<int>(color_space)];
 
         // Setup shader
-        shader_->use();
+        // shader_->use();
 
-        shader_->set("is_straight_alpha", params.pix_desc.is_straight_alpha);
-        shader_->set("plane[0]", texture_id::plane0);
-        shader_->set("plane[1]", texture_id::plane1);
-        shader_->set("plane[2]", texture_id::plane2);
-        shader_->set("plane[3]", texture_id::plane3);
-        shader_->set("precision_factor[0]", precision_factor[0]);
-        shader_->set("precision_factor[1]", precision_factor[1]);
-        shader_->set("precision_factor[2]", precision_factor[2]);
-        shader_->set("precision_factor[3]", precision_factor[3]);
-        shader_->set("local_key", texture_id::local_key);
-        shader_->set("layer_key", texture_id::layer_key);
-        shader_->set_matrix3("color_matrix", color_matrix);
-        shader_->set("luma_coeff", luma_coeff[0], luma_coeff[1], luma_coeff[2]);
-        shader_->set("has_local_key", static_cast<bool>(params.local_key));
-        shader_->set("has_layer_key", static_cast<bool>(params.layer_key));
-        shader_->set("pixel_format", params.pix_desc.format);
-        shader_->set("opacity", transforms.image_transform.is_key ? 1.0 : transforms.image_transform.opacity);
+        // shader_->set("is_straight_alpha", params.pix_desc.is_straight_alpha);
+        // shader_->set("plane[0]", texture_id::plane0);
+        // shader_->set("plane[1]", texture_id::plane1);
+        // shader_->set("plane[2]", texture_id::plane2);
+        // shader_->set("plane[3]", texture_id::plane3);
+        // shader_->set("precision_factor[0]", precision_factor[0]);
+        // shader_->set("precision_factor[1]", precision_factor[1]);
+        // shader_->set("precision_factor[2]", precision_factor[2]);
+        // shader_->set("precision_factor[3]", precision_factor[3]);
+        // shader_->set("local_key", texture_id::local_key);
+        // shader_->set("layer_key", texture_id::layer_key);
+        // shader_->set_matrix3("color_matrix", color_matrix);
+        // shader_->set("luma_coeff", luma_coeff[0], luma_coeff[1], luma_coeff[2]);
+        // shader_->set("has_local_key", static_cast<bool>(params.local_key));
+        // shader_->set("has_layer_key", static_cast<bool>(params.layer_key));
+        // shader_->set("pixel_format", params.pix_desc.format);
+        // shader_->set("opacity", transforms.image_transform.is_key ? 1.0 : transforms.image_transform.opacity);
 
         if (transforms.image_transform.chroma.enable) {
-            shader_->set("chroma", true);
-            shader_->set("chroma_show_mask", transforms.image_transform.chroma.show_mask);
-            shader_->set("chroma_target_hue", transforms.image_transform.chroma.target_hue / 360.0);
-            shader_->set("chroma_hue_width", transforms.image_transform.chroma.hue_width);
-            shader_->set("chroma_min_saturation", transforms.image_transform.chroma.min_saturation);
-            shader_->set("chroma_min_brightness", transforms.image_transform.chroma.min_brightness);
-            shader_->set("chroma_softness", 1.0 + transforms.image_transform.chroma.softness);
-            shader_->set("chroma_spill_suppress", transforms.image_transform.chroma.spill_suppress / 360.0);
-            shader_->set("chroma_spill_suppress_saturation",
-                         transforms.image_transform.chroma.spill_suppress_saturation);
+            // shader_->set("chroma", true);
+            // shader_->set("chroma_show_mask", transforms.image_transform.chroma.show_mask);
+            // shader_->set("chroma_target_hue", transforms.image_transform.chroma.target_hue / 360.0);
+            // shader_->set("chroma_hue_width", transforms.image_transform.chroma.hue_width);
+            // shader_->set("chroma_min_saturation", transforms.image_transform.chroma.min_saturation);
+            // shader_->set("chroma_min_brightness", transforms.image_transform.chroma.min_brightness);
+            // shader_->set("chroma_softness", 1.0 + transforms.image_transform.chroma.softness);
+            // shader_->set("chroma_spill_suppress", transforms.image_transform.chroma.spill_suppress / 360.0);
+            // shader_->set("chroma_spill_suppress_saturation",
+            //             transforms.image_transform.chroma.spill_suppress_saturation);
         } else {
-            shader_->set("chroma", false);
+            // shader_->set("chroma", false);
         }
 
         // Setup blend_func
@@ -243,39 +237,39 @@ struct image_kernel::impl
             params.blend_mode = core::blend_mode::normal;
         }
 
-        params.background->bind(static_cast<int>(texture_id::background));
-        shader_->set("background", texture_id::background);
-        shader_->set("blend_mode", params.blend_mode);
-        shader_->set("keyer", params.keyer);
+        // params.background->bind(static_cast<int>(texture_id::background));
+        // shader_->set("background", texture_id::background);
+        // shader_->set("blend_mode", params.blend_mode);
+        // shader_->set("keyer", params.keyer);
 
         // Setup image-adjustments
-        shader_->set("invert", transforms.image_transform.invert);
+        // shader_->set("invert", transforms.image_transform.invert);
 
         if (transforms.image_transform.levels.min_input > epsilon ||
             transforms.image_transform.levels.max_input < 1.0 - epsilon ||
             transforms.image_transform.levels.min_output > epsilon ||
             transforms.image_transform.levels.max_output < 1.0 - epsilon ||
             std::abs(transforms.image_transform.levels.gamma - 1.0) > epsilon) {
-            shader_->set("levels", true);
-            shader_->set("min_input", transforms.image_transform.levels.min_input);
-            shader_->set("max_input", transforms.image_transform.levels.max_input);
-            shader_->set("min_output", transforms.image_transform.levels.min_output);
-            shader_->set("max_output", transforms.image_transform.levels.max_output);
-            shader_->set("gamma", transforms.image_transform.levels.gamma);
+            // shader_->set("levels", true);
+            // shader_->set("min_input", transforms.image_transform.levels.min_input);
+            // shader_->set("max_input", transforms.image_transform.levels.max_input);
+            // shader_->set("min_output", transforms.image_transform.levels.min_output);
+            // shader_->set("max_output", transforms.image_transform.levels.max_output);
+            // shader_->set("gamma", transforms.image_transform.levels.gamma);
         } else {
-            shader_->set("levels", false);
+            // shader_->set("levels", false);
         }
 
         if (std::abs(transforms.image_transform.brightness - 1.0) > epsilon ||
             std::abs(transforms.image_transform.saturation - 1.0) > epsilon ||
             std::abs(transforms.image_transform.contrast - 1.0) > epsilon) {
-            shader_->set("csb", true);
+            // shader_->set("csb", true);
 
-            shader_->set("brt", transforms.image_transform.brightness);
-            shader_->set("sat", transforms.image_transform.saturation);
-            shader_->set("con", transforms.image_transform.contrast);
+            // shader_->set("brt", transforms.image_transform.brightness);
+            // shader_->set("sat", transforms.image_transform.saturation);
+            // shader_->set("con", transforms.image_transform.contrast);
         } else {
-            shader_->set("csb", false);
+            // shader_->set("csb", false);
         }
 
         // Setup drawing area
@@ -284,7 +278,7 @@ struct image_kernel::impl
         // glDisable(GL_DEPTH_TEST);
 
         // Set render target
-        params.background->attach();
+        // params.background->attach();
 
         // Draw
         // GL(glBindVertexArray(vao_));

@@ -4,11 +4,10 @@ project (accelerator)
 set(SOURCES
 	vulkan/image/image_kernel.cpp
 	vulkan/image/image_mixer.cpp
-	vulkan/image/image_shader.cpp
 
 	vulkan/util/buffer.cpp
 	vulkan/util/device.cpp
-	vulkan/util/shader.cpp
+	vulkan/util/pipeline.cpp
 	vulkan/util/texture.cpp
 	vulkan/util/matrix.cpp
 	vulkan/util/transforms.cpp
@@ -18,11 +17,10 @@ set(SOURCES
 set(HEADERS
 	vulkan/image/image_kernel.h
 	vulkan/image/image_mixer.h
-	vulkan/image/image_shader.h
 
 	vulkan/util/buffer.h
 	vulkan/util/device.h
-	vulkan/util/shader.h
+	vulkan/util/pipeline.h
 	vulkan/util/texture.h
 	vulkan/util/matrix.h
 	vulkan/util/transforms.h

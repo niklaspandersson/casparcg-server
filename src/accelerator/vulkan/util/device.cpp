@@ -21,7 +21,7 @@
 #include "device.h"
 
 #include "buffer.h"
-#include "shader.h"
+#include "pipeline.h"
 #include "texture.h"
 
 #include <common/array.h>

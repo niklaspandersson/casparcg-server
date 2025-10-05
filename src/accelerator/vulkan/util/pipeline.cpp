@@ -18,7 +18,7 @@
  *
  * Author: Robert Nagy, ronag89@gmail.com
  */
-#include "shader.h"
+#include "pipeline.h"
 #include "vulkan_image_fragment.h"
 #include "vulkan_image_vertex.h"
 
