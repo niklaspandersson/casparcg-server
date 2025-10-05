@@ -67,7 +67,7 @@ inline VKAPI_ATTR VkBool32 VKAPI_CALL default_debug_callback(VkDebugUtilsMessage
     if (messageType & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) {
         CASPAR_LOG(info) << "[" << ms << ": " << mt << "] - " << pCallbackData->pMessageIdName << ", "
                          << pCallbackData->pMessage;
-        //printf("[%s: %s] - %s\n%s\n", ms, mt, pCallbackData->pMessageIdName, pCallbackData->pMessage);
+        // printf("[%s: %s] - %s\n%s\n", ms, mt, pCallbackData->pMessageIdName, pCallbackData->pMessage);
     } else {
         if (messageType & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) {
             CASPAR_LOG(info) << "[" << ms << ": " << mt << "] " << pCallbackData->pMessage;
@@ -79,15 +79,15 @@ inline VKAPI_ATTR VkBool32 VKAPI_CALL default_debug_callback(VkDebugUtilsMessage
                      // driver)
 }
 
-void transitionImageLayout(const vk::Image&  image,
-                           vk::Format        format,
-                           vk::ImageLayout   oldLayout,
-                           vk::AccessFlags2   srcAccessMask,
+void transitionImageLayout(const vk::Image&        image,
+                           vk::Format              format,
+                           vk::ImageLayout         oldLayout,
+                           vk::AccessFlags2        srcAccessMask,
                            vk::PipelineStageFlags2 srcStage,
-                           vk::ImageLayout   newLayout,
+                           vk::ImageLayout         newLayout,
                            vk::AccessFlags2        dstAccessMask,
                            vk::PipelineStageFlags2 dstStage,
-                           vk::CommandBuffer cmdBuffer)
+                           vk::CommandBuffer       cmdBuffer)
 {
     vk::PipelineStageFlags2 sourceStage;
     vk::PipelineStageFlags2 destinationStage;
@@ -96,14 +96,13 @@ void transitionImageLayout(const vk::Image&  image,
 
     vk::ImageMemoryBarrier2 barrier{};
     barrier.oldLayout = oldLayout, barrier.newLayout = newLayout, barrier.srcQueueFamilyIndex = vk::QueueFamilyIgnored,
-    barrier.dstQueueFamilyIndex = vk::QueueFamilyIgnored, barrier.image = image,
-    barrier.subresourceRange = range;
-    
+    barrier.dstQueueFamilyIndex = vk::QueueFamilyIgnored, barrier.image = image, barrier.subresourceRange = range;
+
     barrier.srcAccessMask = srcAccessMask;
-    barrier.srcStageMask    = srcStage;
+    barrier.srcStageMask  = srcStage;
 
     barrier.dstAccessMask = dstAccessMask;
-    barrier.dstStageMask = dstStage;
+    barrier.dstStageMask  = dstStage;
 
     vk::DependencyInfo dep_info;
     dep_info.setImageMemoryBarriers(barrier);
@@ -115,12 +114,12 @@ void submitSingleTimeCommands(vk::Device                                    devi
                               vk::CommandPool                               commandPool,
                               vk::Queue                                     queue,
                               std::function<void(const vk::CommandBuffer&)> func,
-                              vk::Fence* pFence = nullptr)
+                              vk::Fence*                                    pFence = nullptr)
 {
-    vk::CommandBufferAllocateInfo allocInfo     = {};
+    vk::CommandBufferAllocateInfo allocInfo = {};
     allocInfo.commandPool = commandPool, allocInfo.level = vk::CommandBufferLevel::ePrimary,
     allocInfo.commandBufferCount = 1;
-    auto commandBuffer = device.allocateCommandBuffers(allocInfo)[0];
+    auto commandBuffer           = device.allocateCommandBuffers(allocInfo)[0];
 
     vk::CommandBufferBeginInfo beginInfo = {};
     beginInfo.flags                      = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
@@ -150,18 +149,19 @@ struct device::impl : public std::enable_shared_from_this<impl>
     using texture_queue_t = tbb::concurrent_bounded_queue<std::shared_ptr<texture>>;
     using buffer_queue_t  = tbb::concurrent_bounded_queue<std::shared_ptr<buffer>>;
 
+    std::array<tbb::concurrent_unordered_map<size_t, texture_queue_t>, 2>                attachment_pools_;
     std::array<std::array<tbb::concurrent_unordered_map<size_t, texture_queue_t>, 4>, 2> device_pools_;
     std::array<tbb::concurrent_unordered_map<size_t, buffer_queue_t>, 2>                 host_pools_;
 
     std::wstring version_;
 
-    vkb::Instance   _vkb_instance;
+    vkb::Instance       _vkb_instance;
     vkb::PhysicalDevice _vkb_physical_device;
     vk::PhysicalDevice  _physical_device;
-    vk::Device _device;
-    vk::Queue  _queue;
-    vk::CommandPool _command_pool;
-    VmaAllocator    _allocator;
+    vk::Device          _device;
+    vk::Queue           _queue;
+    vk::CommandPool     _command_pool;
+    VmaAllocator        _allocator;
 
     io_context                             io_context_;
     decltype(make_work_guard(io_context_)) work_;
@@ -180,7 +180,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
                                     .set_headless(true)
                                     .set_debug_messenger_severity(VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
                                                                   VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
-                                    .set_debug_messenger_type(VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | 
+                                    .set_debug_messenger_type(VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
                                                               VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                                                               VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT)
                                     .set_debug_callback(default_debug_callback)
@@ -216,13 +216,13 @@ struct device::impl : public std::enable_shared_from_this<impl>
             CASPAR_THROW_EXCEPTION(caspar_exception()
                                    << msg_info("Failed to create device: " + device_res.error().message()));
         }
-        auto vkb_device = device_res.value();
-        _device         = vk::Device(vkb_device.device);
-        _queue  = vk::Queue(vkb_device.get_queue(vkb::QueueType::graphics).value());
+        auto vkb_device   = device_res.value();
+        _device           = vk::Device(vkb_device.device);
+        _queue            = vk::Queue(vkb_device.get_queue(vkb::QueueType::graphics).value());
         auto queue_family = vkb_device.get_queue_index(vkb::QueueType::graphics).value();
 
         vk::CommandPoolCreateInfo pool_info;
-        pool_info.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+        pool_info.flags            = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
         pool_info.queueFamilyIndex = queue_family;
 
         _command_pool = _device.createCommandPool(pool_info);
@@ -233,12 +233,11 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
         VmaAllocatorCreateInfo allocatorCreateInfo = {};
         allocatorCreateInfo.flags                  = VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
-        allocatorCreateInfo.vulkanApiVersion       = VK_API_VERSION_1_2;
+        allocatorCreateInfo.vulkanApiVersion       = VK_API_VERSION_1_3;
         allocatorCreateInfo.physicalDevice         = _physical_device;
         allocatorCreateInfo.device                 = _device;
         allocatorCreateInfo.instance               = _vkb_instance.instance;
         allocatorCreateInfo.pVulkanFunctions       = &vulkanFunctions;
-
 
         vmaCreateAllocator(&allocatorCreateInfo, &_allocator);
 
@@ -299,7 +298,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
             attachment_info.storeOp     = vk::AttachmentStoreOp::eStore;
             attachment_info.imageView   = attachment_image_view; // TODO
             rendering_info.setColorAttachments(attachment_info);
-            
+
             cmd_buffer.beginRendering(rendering_info);
             func(cmd_buffer, _device);
             cmd_buffer.endRendering();
@@ -342,77 +341,112 @@ struct device::impl : public std::enable_shared_from_this<impl>
         throw std::runtime_error("Failed to find suitable memory type");
     }
 
-
-    std::shared_ptr<texture> create_texture(int width, int height, int stride, common::bit_depth depth, bool clear)
+    std::shared_ptr<texture> create_attachment(int width, int height, common::bit_depth depth)
     {
-        CASPAR_VERIFY(stride > 0 && stride < 5);
         CASPAR_VERIFY(width > 0 && height > 0);
 
         auto depth_pool_index = depth == common::bit_depth::bit8 ? 0 : 1;
-        auto format = depth == common::bit_depth::bit8 ? vk::Format::eR8G8B8A8Uint : vk::Format::eR16G16B16A16Uint;
+        auto format = depth == common::bit_depth::bit8 ? vk::Format::eR8G8B8A8Unorm : vk::Format::eR16G16B16A16Unorm;
 
         // TODO (perf) Shared pool.
-        auto pool = &device_pools_[depth_pool_index][stride - 1][(width << 16 & 0xFFFF0000) | (height & 0x0000FFFF)];
+        auto pool   = &attachment_pools_[depth_pool_index][(width << 16 & 0xFFFF0000) | (height & 0x0000FFFF)];
         auto extent = vk::Extent3D{static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
+
         std::shared_ptr<texture> tex;
         if (!pool->try_pop(tex)) {
             vk::ImageCreateInfo imageInfo{};
-            imageInfo.imageType = vk::ImageType::e2D;
-            imageInfo.format    = format;
-            imageInfo.extent      = extent;
-            imageInfo.mipLevels   = 1;
-            imageInfo.arrayLayers = 1;
+            imageInfo.imageType     = vk::ImageType::e2D;
+            imageInfo.format        = format;
+            imageInfo.extent        = extent;
+            imageInfo.mipLevels     = 1;
+            imageInfo.arrayLayers   = 1;
             imageInfo.initialLayout = vk::ImageLayout::eUndefined;
-            imageInfo.samples     = vk::SampleCountFlagBits::e1;
-            imageInfo.tiling      = vk::ImageTiling::eOptimal;
-            imageInfo.usage       = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
-                              vk::ImageUsageFlagBits::eSampled;
+            imageInfo.samples       = vk::SampleCountFlagBits::e1;
+            imageInfo.tiling        = vk::ImageTiling::eOptimal;
+            imageInfo.usage         = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eInputAttachment |
+                              vk::ImageUsageFlagBits::eColorAttachment;
             imageInfo.sharingMode = vk::SharingMode::eExclusive;
-            auto image = _device.createImage(imageInfo);
+            auto image            = _device.createImage(imageInfo);
 
             auto memReq = _device.getImageMemoryRequirements(image);
 
             vk::MemoryAllocateInfo allocInfo{};
             allocInfo.allocationSize = memReq.size;
-            allocInfo.memoryTypeIndex = findDedicatedMemoryType(memReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+            allocInfo.memoryTypeIndex =
+                findDedicatedMemoryType(memReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
 
             auto imageMemory = _device.allocateMemory(allocInfo);
             _device.bindImageMemory(image, imageMemory, 0);
             auto clearValue = vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
             auto range      = vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
 
-            vk::ImageViewCreateInfo createInfo({},
-                image,
-                vk::ImageViewType::e2D,
-                format,
-                vk::ComponentMapping(),
-                range);
+            vk::ImageViewCreateInfo createInfo(
+                {}, image, vk::ImageViewType::e2D, format, vk::ComponentMapping(), range);
 
             auto imageView = _device.createImageView(createInfo);
 
-            //submitSingleTimeCommands(_device, _command_pool, _queue, [&](vk::CommandBuffer cmd) {
-            //    transitionImageLayout(image,
-            //                          format,
-            //                          vk::ImageLayout::eUndefined,
-            //                          vk::AccessFlagBits2::eNone,
-            //                          vk::PipelineStageFlagBits2::eTopOfPipe,
+            tex = std::make_shared<texture>(width, height, 4, depth, image, imageMemory, imageView, _device);
+        }
+        tex->set_depth(depth);
 
-            //                          vk::ImageLayout::eTransferDstOptimal,
-            //                          vk::AccessFlagBits2::eMemoryWrite,
-            //                          vk::PipelineStageFlagBits2::eClear,
-            //                          cmd);
-            //    cmd.clearColorImage(image, vk::ImageLayout::eTransferDstOptimal, clearValue, range);
-            //    transitionImageLayout(
-            //        image, format,
-            //        vk::ImageLayout::eTransferDstOptimal,
-            //        vk::AccessFlagBits2::eMemoryWrite,
-            //        vk::PipelineStageFlagBits2::eClear,
+        auto ptr = tex.get();
+        return std::shared_ptr<texture>(
+            ptr, [tex = std::move(tex), pool, self = shared_from_this()](texture*) mutable { pool->push(tex); });
+    }
 
-            //        vk::ImageLayout::eShaderReadOnlyOptimal,
-            //        vk::AccessFlagBits2::eShaderRead,
-            //        vk::PipelineStageFlagBits2::eFragmentShader,
-            //        cmd);
-            //});
+    std::shared_ptr<texture> create_texture(int width, int height, int stride, common::bit_depth depth, bool clear)
+    {
+        CASPAR_VERIFY(stride > 0 && stride < 5);
+        CASPAR_VERIFY(width > 0 && height > 0);
+
+        static vk::Format INTERNAL_FORMAT[][5] = {{vk::Format::eUndefined,
+                                                   vk::Format::eR8Unorm,
+                                                   vk::Format::eR8G8Unorm,
+                                                   vk::Format::eR8G8B8Unorm,
+                                                   vk::Format::eR8G8B8A8Unorm},
+                                                  {vk::Format::eUndefined,
+                                                   vk::Format::eR16Unorm,
+                                                   vk::Format::eR16G16Unorm,
+                                                   vk::Format::eR16G16B16Unorm,
+                                                   vk::Format::eR16G16B16A16Unorm}};
+
+        auto depth_pool_index = depth == common::bit_depth::bit8 ? 0 : 1;
+        auto format           = INTERNAL_FORMAT[depth_pool_index][stride];
+
+        // TODO (perf) Shared pool.
+        auto pool   = &device_pools_[depth_pool_index][stride - 1][(width << 16 & 0xFFFF0000) | (height & 0x0000FFFF)];
+        auto extent = vk::Extent3D{static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
+        std::shared_ptr<texture> tex;
+        if (!pool->try_pop(tex)) {
+            vk::ImageCreateInfo imageInfo{};
+            imageInfo.imageType     = vk::ImageType::e2D;
+            imageInfo.format        = format;
+            imageInfo.extent        = extent;
+            imageInfo.mipLevels     = 1;
+            imageInfo.arrayLayers   = 1;
+            imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+            imageInfo.samples       = vk::SampleCountFlagBits::e1;
+            imageInfo.tiling        = vk::ImageTiling::eOptimal;
+            imageInfo.usage         = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+            imageInfo.sharingMode   = vk::SharingMode::eExclusive;
+            auto image              = _device.createImage(imageInfo);
+
+            auto memReq = _device.getImageMemoryRequirements(image);
+
+            vk::MemoryAllocateInfo allocInfo{};
+            allocInfo.allocationSize = memReq.size;
+            allocInfo.memoryTypeIndex =
+                findDedicatedMemoryType(memReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+            auto imageMemory = _device.allocateMemory(allocInfo);
+            _device.bindImageMemory(image, imageMemory, 0);
+            auto clearValue = vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
+            auto range      = vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+
+            vk::ImageViewCreateInfo createInfo(
+                {}, image, vk::ImageViewType::e2D, format, vk::ComponentMapping(), range);
+
+            auto imageView = _device.createImageView(createInfo);
 
             tex = std::make_shared<texture>(width, height, stride, depth, image, imageMemory, imageView, _device);
         }
@@ -465,12 +499,56 @@ struct device::impl : public std::enable_shared_from_this<impl>
                 buf = *tmp;
             } else {
                 buf = create_buffer(static_cast<int>(source.size()), true);
-                // TODO (perf) Copy inside a TBB worker.
                 std::memcpy(buf->data(), source.data(), source.size());
             }
 
-            auto tex = create_texture(width, height, stride, depth, false);
-            tex->copy_from(*buf);
+            static vk::Format INTERNAL_FORMAT[][5] = {{vk::Format::eUndefined,
+                                                       vk::Format::eR8Unorm,
+                                                       vk::Format::eR8G8Unorm,
+                                                       vk::Format::eR8G8B8Unorm,
+                                                       vk::Format::eR8G8B8A8Unorm},
+                                                      {vk::Format::eUndefined,
+                                                       vk::Format::eR16Unorm,
+                                                       vk::Format::eR16G16Unorm,
+                                                       vk::Format::eR16G16B16Unorm,
+                                                       vk::Format::eR16G16B16A16Unorm}};
+            auto              depth_pool_index     = depth == common::bit_depth::bit8 ? 0 : 1;
+
+            auto tex    = create_texture(width, height, stride, depth, false);
+            auto format = INTERNAL_FORMAT[depth_pool_index][stride];
+            // tex->copy_from(*buf);
+            vk::BufferImageCopy region(0,
+                                       0,
+                                       0,
+                                       vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1),
+                                       vk::Offset3D(0, 0, 0),
+                                       vk::Extent3D(width, height, 1));
+
+            submitSingleTimeCommands(_device, _command_pool, _queue, [&](vk::CommandBuffer cmd) {
+                transitionImageLayout(tex->id(),
+                                      format,
+                                      vk::ImageLayout::eUndefined,
+                                      vk::AccessFlagBits2::eNone,
+                                      vk::PipelineStageFlagBits2::eTopOfPipe,
+
+                                      vk::ImageLayout::eTransferDstOptimal,
+                                      vk::AccessFlagBits2::eTransferWrite,
+                                      vk::PipelineStageFlagBits2::eTransfer,
+                                      cmd);
+
+                cmd.copyBufferToImage(buf->id(), tex->id(), vk::ImageLayout::eTransferDstOptimal, region);
+
+                transitionImageLayout(tex->id(),
+                                      format,
+                                      vk::ImageLayout::eTransferDstOptimal,
+                                      vk::AccessFlagBits2::eTransferWrite,
+                                      vk::PipelineStageFlagBits2::eTransfer,
+
+                                      vk::ImageLayout::eShaderReadOnlyOptimal,
+                                      vk::AccessFlagBits2::eShaderRead,
+                                      vk::PipelineStageFlagBits2::eFragmentShader,
+                                      cmd);
+            });
             // TODO (perf) save tex on source
             return tex;
         });
@@ -483,34 +561,38 @@ struct device::impl : public std::enable_shared_from_this<impl>
             source->copy_to(*buf);
 
             vk::CopyImageToBufferInfo2 copyInfo{};
-            copyInfo.dstBuffer = buf->id();
-            copyInfo.srcImage  = source->id();
+            copyInfo.dstBuffer      = buf->id();
+            copyInfo.srcImage       = source->id();
             copyInfo.srcImageLayout = vk::ImageLayout::eTransferSrcOptimal;
 
             vk::BufferImageCopy2 region{};
-            region.bufferOffset = 0;
+            region.bufferOffset     = 0;
             region.imageSubresource = vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1);
-            region.imageOffset  = vk::Offset3D{0, 0, 0};
+            region.imageOffset      = vk::Offset3D{0, 0, 0};
             region.imageExtent =
                 vk::Extent3D{static_cast<uint32_t>(source->width()), static_cast<uint32_t>(source->height()), 1};
             copyInfo.setRegions(region);
 
             auto fence = _device.createFence(vk::FenceCreateInfo());
 
-             submitSingleTimeCommands(_device, _command_pool, _queue, [&](vk::CommandBuffer cmd) {
-                transitionImageLayout(source->id(),
-                                      vk::Format::eR8G8B8A8Uint,
-                                       vk::ImageLayout::eUndefined,
-                                       vk::AccessFlagBits2::eNone,
-                                       vk::PipelineStageFlagBits2::eTopOfPipe,
+            submitSingleTimeCommands(
+                _device,
+                _command_pool,
+                _queue,
+                [&](vk::CommandBuffer cmd) {
+                    transitionImageLayout(source->id(),
+                                          vk::Format::eR8G8B8A8Unorm,
+                                          vk::ImageLayout::eUndefined,
+                                          vk::AccessFlagBits2::eNone,
+                                          vk::PipelineStageFlagBits2::eTopOfPipe,
 
-                                      vk::ImageLayout::eTransferSrcOptimal,
-                                      vk::AccessFlagBits2::eHostRead,
-                                      vk::PipelineStageFlagBits2::eHost,
-                                      cmd);
-                cmd.copyImageToBuffer2(copyInfo);
-            }, &fence);
-
+                                          vk::ImageLayout::eTransferSrcOptimal,
+                                          vk::AccessFlagBits2::eHostRead,
+                                          vk::PipelineStageFlagBits2::eHost,
+                                          cmd);
+                    cmd.copyImageToBuffer2(copyInfo);
+                },
+                &fence);
 
             deadline_timer timer(io_context_);
             for (auto n = 0; true; ++n) {
@@ -646,6 +728,11 @@ device::device()
 {
 }
 device::~device() {}
+std::shared_ptr<texture> device::create_attachment(int width, int height, common::bit_depth depth)
+{
+    return impl_->create_attachment(width, height, depth);
+}
+
 std::shared_ptr<texture> device::create_texture(int width, int height, int stride, common::bit_depth depth)
 {
     return impl_->create_texture(width, height, stride, depth, true);

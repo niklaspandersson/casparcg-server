@@ -93,7 +93,7 @@ class image_renderer
 
         return flatten(vulkan_->dispatch_async(
             [=, layers = std::move(layers)]() mutable -> std::shared_future<array<const std::uint8_t>> {
-                auto target_texture = vulkan_->create_texture(format_desc.width, format_desc.height, 4, depth_);
+                auto target_texture = vulkan_->create_attachment(format_desc.width, format_desc.height, depth_);
 
                 draw(target_texture, std::move(layers), format_desc);
 
@@ -128,7 +128,7 @@ class image_renderer
         std::shared_ptr<texture> local_mix_texture;
 
         if (layer.blend_mode != core::blend_mode::normal) {
-            auto layer_texture = vulkan_->create_texture(target_texture->width(), target_texture->height(), 4, depth_);
+            auto layer_texture = vulkan_->create_attachment(target_texture->width(), target_texture->height(), depth_);
 
             for (auto& item : layer.items)
                 draw(layer_texture,
@@ -195,7 +195,7 @@ class image_renderer
             local_mix_texture =
                 local_mix_texture
                     ? local_mix_texture
-                    : vulkan_->create_texture(target_texture->width(), target_texture->height(), 4, depth_);
+                    : vulkan_->create_attachment(target_texture->width(), target_texture->height(), depth_);
 
             draw_params.background = local_mix_texture;
             draw_params.local_key  = std::move(local_key_texture); // Use and reset the key
