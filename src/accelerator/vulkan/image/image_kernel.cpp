@@ -74,6 +74,7 @@ bool is_outside_screen(const std::vector<core::frame_geometry::coord>& coords)
 
 static const double epsilon = 0.001;
 
+
 struct image_kernel::impl
 {
     spl::shared_ptr<device> vulkan_;
@@ -83,16 +84,12 @@ struct image_kernel::impl
         : vulkan_(vulkan)
     {
         pipeline_ = vulkan_->create_pipeline();
-            // GL(glGenVertexArrays(1, &vao_));
-            // GL(glGenBuffers(1, &vbo_));
     }
 
     ~impl()
     {
         vulkan_->dispatch_sync([&] {
             pipeline_.reset();
-            // GL(glDeleteVertexArrays(1, &vao_));
-            // GL(glDeleteBuffers(1, &vbo_));
         });
     }
 

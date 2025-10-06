@@ -326,45 +326,6 @@ struct pipeline::impl
 
     //void draw(const draw_params& params)
     //{
-    //    vk::ClearValue clearColor{vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f})};
-
-    //    // Viewport and scissor
-    //    vk::Viewport viewport{0.0f,
-    //                          0.0f,
-    //                          static_cast<float>(params.background->width()),
-    //                          static_cast<float>(params.background->height()),
-    //                          0.0f,
-    //                          1.0f};
-
-    //    vk::Extent2D extent = {params.background->width(), params.background->height()};
-    //    vk::Rect2D scissor{{0, 0}, extent};
-    //    
-    //    // setup "renderpass" dynamically
-    //    vk::RenderingAttachmentInfo attachment_info{};
-    //    attachment_info.imageView   = params.background->view();
-    //    attachment_info.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
-    //    attachment_info.loadOp      = vk::AttachmentLoadOp::eClear;
-    //    attachment_info.storeOp     = vk::AttachmentStoreOp::eStore;
-    //    attachment_info.clearValue  = clearColor;
-    //    
-
-    //    vk::RenderingInfo rendering_info{};
-    //    rendering_info.renderArea = scissor;
-    //    rendering_info.layerCount           = 1;
-    //    rendering_info.setColorAttachments(attachment_info);
-
-    //    // Record commands
-    //    commandBuffer.reset({});
-    //    commandBuffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-
-    //    // transition framebuffer image for use as color attachment
-    //    /*transitionImageLayout(swapchain_data.image,
-    //                          vk::Format::eR8G8B8A8Srgb,
-    //                          vk::ImageLayout::eUndefined,
-    //                          vk::ImageLayout::eColorAttachmentOptimal,
-    //                          commandBuffer);*/
-
-    //    commandBuffer.beginRendering(rendering_info);
     //    commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline_);
     //    commandBuffer.bindVertexBuffers(0, _vertexBuffer, {0});
     //    commandBuffer.bindDescriptorSets(
@@ -374,23 +335,6 @@ struct pipeline::impl
     //    commandBuffer.setViewport(0, viewport);
     //    commandBuffer.setScissor(0, scissor);
     //    commandBuffer.draw(4, 1, 0, 0);
-    //    commandBuffer.endRendering();
-
-    //    //// transition framebuffer image for use for presentation in swapchain
-    //    //transitionImageLayout(swapchain_data.image,
-    //    //                      vk::Format::eR8G8B8A8Srgb,
-    //    //                      vk::ImageLayout::eColorAttachmentOptimal,
-    //    //                      vk::ImageLayout::ePresentSrcKHR,
-    //    //                      commandBuffer);
-
-    //    commandBuffer.end();
-
-    //    // Submit command buffer
-    //    vk::SubmitInfo         submitInfo{};
-    //    vk::PipelineStageFlags waitStages = {vk::PipelineStageFlagBits::eColorAttachmentOutput};
-    //    submitInfo.setWaitDstStageMask(waitStages);
-    //    submitInfo.setCommandBuffers(commandBuffer);
-    //    _graphicsQueue.submit(submitInfo, current_frame.renderFence);
     //}
 
     ~impl() {

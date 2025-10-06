@@ -374,6 +374,64 @@ struct device::impl : public std::enable_shared_from_this<impl>
         throw std::runtime_error("Failed to find suitable memory type");
     }
 
+template <typename T>
+using Res = std::pair<T, vk::DeviceMemory>;
+
+    Res <vk::Buffer> upload_vertex_buffer()
+    {
+        size_t size = sizeof(core::frame_geometry::coord) * 4;
+        auto   data = core::frame_geometry::get_default().data().data();
+
+        // staging buffer
+        vk::BufferCreateInfo stagingInfo{};
+        stagingInfo.size       = size;
+        stagingInfo.usage      = vk::BufferUsageFlagBits::eTransferSrc;
+        stagingInfo.sharingMode = vk::SharingMode::eExclusive;
+
+        auto stagingBuffer = _device.createBuffer(stagingInfo);
+
+        auto stagingMemReq = _device.getBufferMemoryRequirements(stagingBuffer);
+
+        vk::MemoryAllocateInfo stagingAlloc{};
+        stagingAlloc.allocationSize  = stagingMemReq.size;
+        stagingAlloc.memoryTypeIndex = findDedicatedMemoryType(stagingMemReq.memoryTypeBits,
+                                                            vk::MemoryPropertyFlagBits::eHostVisible |
+                                                                vk::MemoryPropertyFlagBits::eHostCoherent);
+
+        auto stagingBufferMemory = _device.allocateMemory(stagingAlloc);
+        _device.bindBufferMemory(stagingBuffer, stagingBufferMemory, 0);
+
+        void* dest = _device.mapMemory(stagingBufferMemory, 0, size);
+        memcpy(dest, data, size);
+        _device.unmapMemory(stagingBufferMemory);
+
+        // vertex buffer
+        vk::BufferCreateInfo bufferInfo{};
+        bufferInfo.size        = size;
+        bufferInfo.usage       = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer;
+        bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+        auto vertexBuffer = _device.createBuffer(bufferInfo);
+
+        auto memReq = _device.getBufferMemoryRequirements(vertexBuffer);
+
+        vk::MemoryAllocateInfo allocInfo{};
+        allocInfo.allocationSize  = memReq.size;
+        allocInfo.memoryTypeIndex = findDedicatedMemoryType(memReq.memoryTypeBits,
+                                                            vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+        auto vertexBufferMemory = _device.allocateMemory(allocInfo);
+        _device.bindBufferMemory(vertexBuffer, vertexBufferMemory, 0);
+
+        submitSingleTimeCommands(_device, _command_pool, _queue, [&](vk::CommandBuffer cmd) {
+            cmd.copyBuffer(stagingBuffer, vertexBuffer, vk::BufferCopy(0, 0, size));
+        });
+
+        _device.freeMemory(stagingBufferMemory);
+        _device.destroyBuffer(stagingBuffer);
+    }
+    
+
     std::shared_ptr<texture> create_attachment(int width, int height, common::bit_depth depth)
     {
         CASPAR_VERIFY(width > 0 && height > 0);
