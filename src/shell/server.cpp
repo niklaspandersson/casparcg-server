@@ -70,7 +70,8 @@ std::shared_ptr<boost::asio::io_context> create_io_context_with_running_service(
     auto io_context = std::make_shared<boost::asio::io_context>();
     // To keep the io_context::run() running although no pending async
     // operations are posted.
-    auto work      = std::make_shared<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(boost::asio::make_work_guard(*io_context));
+    auto work = std::make_shared<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(
+        boost::asio::make_work_guard(*io_context));
     auto weak_work = std::weak_ptr<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(work);
     auto thread    = std::make_shared<std::thread>([io_context, weak_work] {
         while (auto strong = weak_work.lock()) {
@@ -264,7 +265,7 @@ struct server::impl
         auto accelerator = boost::to_lower_copy(pt.get(L"configuration.accelerator", L"auto"));
         caspar::accelerator::accelerator_backend backend = caspar::accelerator::accelerator_backend::invalid;
         if (accelerator == L"auto") {
-#if defined(APPLE)
+#if defined(__APPLE__)
             backend = caspar::accelerator::accelerator_backend::vulkan;
 #else
             backend = caspar::accelerator::accelerator_backend::opengl;
@@ -436,7 +437,7 @@ struct server::impl
         amcp_command_repo_ = std::make_shared<amcp::amcp_command_repository>(channels_);
 
         auto accelerator_device = accelerator_.get_device();
-        auto ctx        = std::make_shared<amcp::amcp_command_static_context>(
+        auto ctx                = std::make_shared<amcp::amcp_command_static_context>(
             video_format_repository_,
             cg_registry_,
             producer_registry_,
