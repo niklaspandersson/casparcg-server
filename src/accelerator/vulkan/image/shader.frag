@@ -5,10 +5,10 @@ layout(location = 1) in vec4 TexCoord2;
 
 layout(location = 0) out vec4 fragColor;
 
+layout(binding = 0) uniform sampler2D	plane[4];
 layout(binding = 1) uniform sampler2D	background;
-layout(binding = 2) uniform sampler2D	plane[4];
-layout(binding = 3) uniform sampler2D	local_key;
-layout(binding = 4) uniform sampler2D	layer_key;
+layout(binding = 2) uniform sampler2D	local_key;
+layout(binding = 3) uniform sampler2D	layer_key;
 
 const uint is_straight_alpha_mask = 1u << 0;
 const uint has_local_key_mask = 1u << 1;
@@ -19,7 +19,7 @@ const uint csb_mask = 1u << 5;
 const uint chroma_mask = 1u << 6;
 const uint chroma_show_mask_mask = 1u << 7;
 
-layout(binding = 0) uniform ParamsBlock {
+layout(push_constant) uniform ParamsBlock {
     uint color_space_index;
     float precision_factor[4];
     int blend_mode;
@@ -66,8 +66,8 @@ const mat3[3] color_matrices = mat3[3](
                     mat3(1.0, 0.0, 1.4746, 1.0, -0.16455312684366, -0.57135312684366, 1.0, 1.8814, 0.0)
                 ); 
 const vec3[3] luma_coefficients = vec3[3](
-                    vec3(0.299, 0.587, 0.114), // Rec. 709
-                    vec3(0.2126, 0.7152, 0.0722),  // Rec. 601
+                    vec3(0.299, 0.587, 0.114), // Rec. 601
+                    vec3(0.2126, 0.7152, 0.0722),  // Rec. 709
                     vec3(0.2627, 0.6780, 0.0593)   // Rec. 2020
                 );
 

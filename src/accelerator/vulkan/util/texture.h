@@ -38,6 +38,8 @@ class texture final
     texture& operator=(const texture&) = delete;
     texture& operator=(texture&& other);
 
+    vk::ImageView texture::view() const;
+
 #ifdef WIN32
     void copy_from(int source);
 #endif

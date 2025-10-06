@@ -28,7 +28,12 @@
 #include <functional>
 #include <future>
 
+#include <vulkan/vulkan.hpp>
+
 namespace caspar { namespace accelerator { namespace vulkan {
+
+using render_func = std::add_pointer_t<void(vk::CommandBuffer, vk::Device)>;
+
 
 class device final
     : public std::enable_shared_from_this<device>
@@ -41,6 +46,9 @@ class device final
     device(const device&) = delete;
 
     device& operator=(const device&) = delete;
+
+    void                            submit_render_pass(std::shared_ptr<class texture> attachment, render_func&& func);
+    std::shared_ptr<class pipeline> create_pipeline();
 
     std::shared_ptr<class texture> create_attachment(int width, int height, common::bit_depth depth);
     std::shared_ptr<class texture> create_texture(int width, int height, int stride, common::bit_depth depth);

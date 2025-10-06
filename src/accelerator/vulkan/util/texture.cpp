@@ -65,13 +65,6 @@ struct texture::impl
         , depth_(depth)
         , size_(width * height * stride * (depth == common::bit_depth::bit8 ? 1 : 2))
     {
-        // GL(glCreateTextures(GL_TEXTURE_2D, 1, &id_));
-        // GL(glTextureParameteri(id_, GL_TEXTURE_MIN_FILTER, GL_LINEAR));
-        // GL(glTextureParameteri(id_, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
-        // GL(glTextureParameteri(id_, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE));
-        // GL(glTextureParameteri(id_, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
-        // GL(glTextureStorage2D(
-        //     id_, 1, INTERNAL_FORMAT[depth_ == common::bit_depth::bit8 ? 0 : 1][stride_], width_, height_));
     }
 
     ~impl() {
@@ -79,6 +72,8 @@ struct texture::impl
         device_.freeMemory(memory_);
         device_.destroyImage(image_);
     }
+
+    vk::ImageView view() const { return imageView_; }
 
     void bind() { /*GL(glBindTexture(GL_TEXTURE_2D, id_));*/ }
 
@@ -159,6 +154,8 @@ texture& texture::operator=(texture&& other)
     impl_ = std::move(other.impl_);
     return *this;
 }
+
+vk::ImageView texture::view() const { return impl_->imageView_; }
 void texture::bind(int index) { impl_->bind(index); }
 void texture::unbind() { impl_->unbind(); }
 void texture::attach() { impl_->attach(); }

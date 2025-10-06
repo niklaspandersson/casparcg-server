@@ -25,7 +25,6 @@
 #include "../util/texture.h"
 
 #include <common/assert.h>
-// #include <common/gl/gl_check.h>
 
 #include <core/frame/frame_transform.h>
 #include <core/frame/pixel_format.h>
@@ -38,19 +37,18 @@
 
 namespace caspar::accelerator::vulkan {
 
-double get_precision_factor(common::bit_depth depth)
+float get_precision_factor(common::bit_depth depth)
 {
     switch (depth) {
         case common::bit_depth::bit8:
-            return 1.0;
+            return 1.0f;
         case common::bit_depth::bit10:
-            return 64.0;
+            return 64.0f;
         case common::bit_depth::bit12:
-            return 16.0;
+            return 16.0f;
         case common::bit_depth::bit16:
-            return 1.0;
         default:
-            return 1.0;
+            return 1.0f;
     }
 }
 
@@ -79,19 +77,20 @@ static const double epsilon = 0.001;
 struct image_kernel::impl
 {
     spl::shared_ptr<device> vulkan_;
+    std::shared_ptr<pipeline> pipeline_;
 
     explicit impl(const spl::shared_ptr<device>& vulkan)
         : vulkan_(vulkan)
     {
-        vulkan_->dispatch_sync([&] {
+        pipeline_ = vulkan_->create_pipeline();
             // GL(glGenVertexArrays(1, &vao_));
             // GL(glGenBuffers(1, &vbo_));
-        });
     }
 
     ~impl()
     {
         vulkan_->dispatch_sync([&] {
+            pipeline_.reset();
             // GL(glDeleteVertexArrays(1, &vao_));
             // GL(glDeleteBuffers(1, &vbo_));
         });
@@ -164,7 +163,7 @@ struct image_kernel::impl
             return;
         }
 
-        double precision_factor[4] = {1, 1, 1, 1};
+        float precision_factor[4] = {1, 1, 1, 1};
 
         // Bind textures
 
@@ -273,6 +272,11 @@ struct image_kernel::impl
         }
 
         // Setup drawing area
+
+        vulkan_->submit_render_pass(
+            params.background,
+            [](vk::CommandBuffer cmd_buf, vk::Device device) {
+            });
 
         // GL(glViewport(0, 0, params.background->width(), params.background->height()));
         // glDisable(GL_DEPTH_TEST);

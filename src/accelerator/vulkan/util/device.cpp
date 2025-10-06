@@ -170,7 +170,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
     impl()
         : work_(make_work_guard(io_context_))
     {
-        CASPAR_LOG(info) << L"Initializing (noop) Vulkan Device.";
+        CASPAR_LOG(info) << L"Initializing Vulkan Device.";
 
         // auto pDebugFn = debug_callback;
 
@@ -196,11 +196,23 @@ struct device::impl : public std::enable_shared_from_this<impl>
         // Find suitable physical device
         auto gpu_selector = vkb::PhysicalDeviceSelector(_vkb_instance);
 
+        vk::PhysicalDeviceFeatures         feat;
+        feat.shaderFloat64 = true;
+
         vk::PhysicalDeviceVulkan13Features features;
         features.dynamicRendering = true;
         features.synchronization2 = true;
 
-        auto gpu_res = gpu_selector.set_minimum_version(1, 3).set_required_features_13(features).select();
+        vk::PhysicalDeviceRobustness2FeaturesEXT robustness2_features;
+        robustness2_features.nullDescriptor = true;
+        
+
+        auto gpu_res = gpu_selector.set_minimum_version(1, 3)
+                           .set_required_features(feat)
+                           //.add_required_extensions({"VK_EXT_robustness2"})
+                           //.add_required_extension_features(robustness2_features)
+                           .set_required_features_13(features)
+                           .select();
         if (!gpu_res) {
             CASPAR_THROW_EXCEPTION(caspar_exception()
                                    << msg_info("Failed to select physical device: " + gpu_res.error().message()));
@@ -281,22 +293,37 @@ struct device::impl : public std::enable_shared_from_this<impl>
         return future;
     }
 
-    template <typename Func>
-    void submit_render_pass(vk::ImageView attachment_image_view, Func&& func)
+    void submit_render_pass(std::shared_ptr<texture> attachment, render_func&& func)
     {
         dispatch_async([=] {
             auto cmd_buffer = _device.allocateCommandBuffers(
                 vk::CommandBufferAllocateInfo(_command_pool, vk::CommandBufferLevel::ePrimary, 1))[0];
             cmd_buffer.begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
-            vk::RenderingInfo rendering_info;
+            vk::ClearValue clearColor{vk::ClearColorValue(std::array<float, 4>{0.0f, 1.0f, 0.0f, 1.0f})};
 
-            vk::RenderingAttachmentInfo attachment_info;
-            attachment_info.resolveMode = vk::ResolveModeFlagBits::eNone;
-            attachment_info.loadOp      = vk::AttachmentLoadOp::eLoad;
+            // Viewport and scissor
+            vk::Viewport viewport{0.0f,
+                                  0.0f,
+                                  static_cast<float>(attachment->width()),
+                                  static_cast<float>(attachment->height()),
+                                  0.0f,
+                                  1.0f};
+
+            vk::Extent2D extent = { static_cast<uint32_t>(attachment->width()), static_cast<uint32_t>(attachment->height()) };
+            vk::Rect2D   scissor{{0, 0}, extent};
+
+            // setup "renderpass" dynamically
+            vk::RenderingAttachmentInfo attachment_info{};
+            attachment_info.imageView   = attachment->view();
             attachment_info.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+            attachment_info.loadOp      = vk::AttachmentLoadOp::eClear;
             attachment_info.storeOp     = vk::AttachmentStoreOp::eStore;
-            attachment_info.imageView   = attachment_image_view; // TODO
+            attachment_info.clearValue  = clearColor;
+
+            vk::RenderingInfo rendering_info{};
+            rendering_info.renderArea = scissor;
+            rendering_info.layerCount = 1;
             rendering_info.setColorAttachments(attachment_info);
 
             cmd_buffer.beginRendering(rendering_info);
@@ -307,6 +334,12 @@ struct device::impl : public std::enable_shared_from_this<impl>
             vk::SubmitInfo2 submit_info;
             submit_info.setCommandBufferInfos(vk::CommandBufferSubmitInfo().setCommandBuffer(cmd_buffer));
             _queue.submit2(submit_info);
+        });
+    }
+
+    std::shared_ptr<pipeline> create_pipeline()
+    { return dispatch_sync([&]() {
+            return std::make_shared<pipeline>(_device);
         });
     }
 
@@ -728,6 +761,15 @@ device::device()
 {
 }
 device::~device() {}
+
+void device::submit_render_pass(std::shared_ptr<texture> attachment, render_func&& func) {
+    impl_->submit_render_pass(attachment, std::move(func));
+}
+
+std::shared_ptr<pipeline> device::create_pipeline() { 
+    return impl_->create_pipeline(); 
+}
+
 std::shared_ptr<texture> device::create_attachment(int width, int height, common::bit_depth depth)
 {
     return impl_->create_attachment(width, height, depth);

@@ -21,41 +21,20 @@
 
 #pragma once
 
-#include <GL/glew.h>
-#include <memory>
-#include <string>
-#include <type_traits>
+#include <vulkan/vulkan.hpp>
 
 namespace caspar { namespace accelerator { namespace vulkan {
 
-class shader final
+class pipeline final
 {
-    shader(const shader&);
-    shader& operator=(const shader&);
+    pipeline(const pipeline&);
+    pipeline& operator=(const pipeline&);
 
   public:
-    shader(const std::string& vertex_source_str, const std::string& fragment_source_str);
-    ~shader();
+    explicit pipeline(vk::Device device);
+    ~pipeline();
 
-    void set(const std::string& name, bool value);
-    void set(const std::string& name, int value);
-    void set(const std::string& name, float value);
-    void set(const std::string& name, double value0, double value1);
-    void set(const std::string& name, double value0, double value1, double value2);
-    void set(const std::string& name, double value);
-    void set_matrix3(const std::string& name, const float* value);
-
-    GLint get_attrib_location(const char* name);
-
-    template <typename E>
-    typename std::enable_if<std::is_enum<E>::value, void>::type set(const std::string& name, E value)
-    {
-        set(name, static_cast<typename std::underlying_type<E>::type>(value));
-    }
-
-    void use() const;
-
-    int id() const;
+    vk::Pipeline id() const;
 
   private:
     struct impl;
