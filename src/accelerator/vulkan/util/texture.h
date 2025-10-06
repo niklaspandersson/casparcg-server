@@ -30,7 +30,14 @@ namespace caspar { namespace accelerator { namespace vulkan {
 class texture final
 {
   public:
-    texture(int width, int height, int stride, common::bit_depth depth, vk::Image image, vk::DeviceMemory memory, vk::ImageView imageView, vk::Device device);
+    texture(int               width,
+            int               height,
+            int               stride,
+            common::bit_depth depth,
+            vk::Image         image,
+            vk::DeviceMemory  memory,
+            vk::ImageView     imageView,
+            vk::Device        device);
     texture(const texture&) = delete;
     texture(texture&& other);
     ~texture();
@@ -38,7 +45,7 @@ class texture final
     texture& operator=(const texture&) = delete;
     texture& operator=(texture&& other);
 
-    vk::ImageView texture::view() const;
+    vk::ImageView view() const;
 
 #ifdef WIN32
     void copy_from(int source);

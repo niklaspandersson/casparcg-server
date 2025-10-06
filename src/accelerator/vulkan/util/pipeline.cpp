@@ -19,13 +19,13 @@
  * Author: Robert Nagy, ronag89@gmail.com
  */
 
+#include "pipeline.h"
 #include "../image/image_kernel.h"
 #include "texture.h"
-#include "pipeline.h"
 
-#include <core/frame/geometry.h>
 #include "vulkan_image_fragment.h"
 #include "vulkan_image_vertex.h"
+#include <core/frame/geometry.h>
 
 #include <vulkan/vulkan.hpp>
 
@@ -43,8 +43,8 @@ std::vector<vk::PipelineShaderStageCreateInfo> create_shader_program(vk::Device 
         return device.createShaderModule(createInfo);
     };
 
-    auto vertShaderModule = createShaderModule(vertex_shader, sizeof(vertex_shader)-1);
-    auto fragShaderModule = createShaderModule(fragment_shader, sizeof(fragment_shader)-1);
+    auto vertShaderModule = createShaderModule(vertex_shader, sizeof(vertex_shader) - 1);
+    auto fragShaderModule = createShaderModule(fragment_shader, sizeof(fragment_shader) - 1);
 
     vk::PipelineShaderStageCreateInfo vertShaderStageInfo;
     vertShaderStageInfo.stage  = vk::ShaderStageFlagBits::eVertex;
@@ -62,9 +62,8 @@ std::vector<vk::PipelineShaderStageCreateInfo> create_shader_program(vk::Device 
 std::array<vk::VertexInputAttributeDescription, 2> get_attribute_descriptions(uint32_t binding)
 {
     std::array<vk::VertexInputAttributeDescription, 2> attributeDescriptions{
-        {{0, binding, vk::Format::eR64G64Sfloat, offsetof(core::frame_geometry::coord, vertex_x)},
-         {1, binding, vk::Format::eR64G64B64A64Sfloat, offsetof(core::frame_geometry::coord, texture_x)}}
-    };
+        {{0, binding, vk::Format::eR32G32Sfloat, offsetof(core::frame_geometry::coord, vertex_x) / 2},
+         {1, binding, vk::Format::eR32G32B32A32Sfloat, offsetof(core::frame_geometry::coord, texture_x) / 2}}};
 
     return attributeDescriptions;
 }
@@ -73,12 +72,12 @@ const int DescriptorPoolSize = 10;
 
 struct uniform_block
 {
-    uint32_t  color_space_index;
-    float precision_factor[4];
-    int32_t   blend_mode;
-    int32_t   keyer;
-    int32_t   pixel_format;
-    float      opacity;
+    uint32_t color_space_index;
+    float    precision_factor[4];
+    int32_t  blend_mode;
+    int32_t  keyer;
+    int32_t  pixel_format;
+    float    opacity;
 
     /* levels */
     float min_input;
@@ -106,15 +105,15 @@ struct uniform_block
 
 struct pipeline::impl
 {
-    vk::Device              device_;
-    
-    vk::Sampler             textureSampler_;
-    vk::DescriptorSetLayout descriptorSetLayout_;
-    vk::DescriptorPool      descriptorPool_;
+    vk::Device device_;
+
+    vk::Sampler                    textureSampler_;
+    vk::DescriptorSetLayout        descriptorSetLayout_;
+    vk::DescriptorPool             descriptorPool_;
     std::vector<vk::DescriptorSet> descriptorSets_;
- 
-    vk::PipelineLayout      pipelineLayout_;
-    vk::Pipeline            pipeline_;
+
+    vk::PipelineLayout pipelineLayout_;
+    vk::Pipeline       pipeline_;
 
     size_t currentDescriptorSet_ = 0;
 
@@ -131,25 +130,25 @@ struct pipeline::impl
         planesLayoutBinding.stageFlags      = vk::ShaderStageFlagBits::eFragment;
 
         vk::DescriptorSetLayoutBinding backgroundLayoutBinding{};
-        backgroundLayoutBinding.binding     = 1;
-        backgroundLayoutBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        backgroundLayoutBinding.binding         = 1;
+        backgroundLayoutBinding.descriptorType  = vk::DescriptorType::eCombinedImageSampler;
         backgroundLayoutBinding.descriptorCount = 1;
         backgroundLayoutBinding.stageFlags      = vk::ShaderStageFlagBits::eFragment;
 
-        
         vk::DescriptorSetLayoutBinding localKeyLayoutBinding{};
-        localKeyLayoutBinding.binding       = 2;
-        localKeyLayoutBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        localKeyLayoutBinding.binding         = 2;
+        localKeyLayoutBinding.descriptorType  = vk::DescriptorType::eCombinedImageSampler;
         localKeyLayoutBinding.descriptorCount = 1;
         localKeyLayoutBinding.stageFlags      = vk::ShaderStageFlagBits::eFragment;
 
         vk::DescriptorSetLayoutBinding localMaxLayoutBinding{};
-        localMaxLayoutBinding.binding       = 3;
-        localMaxLayoutBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        localMaxLayoutBinding.binding         = 3;
+        localMaxLayoutBinding.descriptorType  = vk::DescriptorType::eCombinedImageSampler;
         localMaxLayoutBinding.descriptorCount = 1;
         localMaxLayoutBinding.stageFlags      = vk::ShaderStageFlagBits::eFragment;
 
-        std::vector bindings = {planesLayoutBinding, backgroundLayoutBinding, localKeyLayoutBinding, localMaxLayoutBinding};
+        std::vector bindings = {
+            planesLayoutBinding, backgroundLayoutBinding, localKeyLayoutBinding, localMaxLayoutBinding};
 
         vk::DescriptorSetLayoutCreateInfo layoutInfo{};
         layoutInfo.setBindings(bindings);
@@ -157,7 +156,7 @@ struct pipeline::impl
         descriptorSetLayout_ = device_.createDescriptorSetLayout(layoutInfo);
 
         // Create descriptor pool
-        vk::DescriptorPoolSize samplerPoolSize(vk::DescriptorType::eCombinedImageSampler, 7*DescriptorPoolSize);
+        vk::DescriptorPoolSize samplerPoolSize(vk::DescriptorType::eCombinedImageSampler, 7 * DescriptorPoolSize);
         vk::DescriptorPoolSize poolSizes[]{samplerPoolSize};
 
         vk::DescriptorPoolCreateInfo poolInfo{};
@@ -175,7 +174,8 @@ struct pipeline::impl
         descriptorSets_ = device_.allocateDescriptorSets(allocInfo);
     }
 
-    void setup_sampler() {
+    void setup_sampler()
+    {
         vk::SamplerCreateInfo samplerInfo{};
 
         samplerInfo.magFilter               = vk::Filter::eLinear;
@@ -194,7 +194,7 @@ struct pipeline::impl
         samplerInfo.borderColor             = vk::BorderColor::eIntOpaqueBlack;
         samplerInfo.unnormalizedCoordinates = VK_FALSE;
 
-        textureSampler_= device_.createSampler(samplerInfo);   
+        textureSampler_ = device_.createSampler(samplerInfo);
     }
 
   public:
@@ -208,14 +208,15 @@ struct pipeline::impl
         // Vertex input
         auto attributeDescriptions = get_attribute_descriptions(0);
 
-        auto vertexBindings = vk::VertexInputBindingDescription(0, sizeof(core::frame_geometry::coord), vk::VertexInputRate::eVertex);
+        auto vertexBindings =
+            vk::VertexInputBindingDescription(0, sizeof(core::frame_geometry::coord), vk::VertexInputRate::eVertex);
         vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
         vertexInputInfo.setVertexBindingDescriptions(vertexBindings);
         vertexInputInfo.setVertexAttributeDescriptions(attributeDescriptions);
 
         // Input assembly
         vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
-        inputAssembly.topology  = vk::PrimitiveTopology::eTriangleStrip;
+        inputAssembly.topology               = vk::PrimitiveTopology::eTriangleStrip;
         inputAssembly.primitiveRestartEnable = VK_TRUE;
 
         vk::PipelineViewportStateCreateInfo viewportState{};
@@ -240,9 +241,9 @@ struct pipeline::impl
 
         // Color blending
         vk::PipelineColorBlendAttachmentState colorBlendAttachment{};
-        colorBlendAttachment.blendEnable = vk::False;
+        colorBlendAttachment.blendEnable    = vk::False;
         colorBlendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-                          vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+                                              vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
 
         vk::PipelineColorBlendStateCreateInfo colorBlending{};
         colorBlending.logicOpEnable = vk::False;
@@ -280,14 +281,14 @@ struct pipeline::impl
         auto shaderStages = std::move(create_shader_program(device_));
         pipelineInfo.setStages(shaderStages);
 
-        vk::Format swapchain_image_format = vk::Format::eB8G8R8A8Unorm;
+        vk::Format                      swapchain_image_format = vk::Format::eB8G8R8A8Unorm;
         vk::PipelineRenderingCreateInfo rendering_info{};
-        rendering_info.colorAttachmentCount = 1;
+        rendering_info.colorAttachmentCount    = 1;
         rendering_info.pColorAttachmentFormats = &swapchain_image_format;
 
         pipelineInfo.pNext = &rendering_info;
 
-        pipeline_= device_.createGraphicsPipeline(nullptr, pipelineInfo).value;
+        pipeline_ = device_.createGraphicsPipeline(nullptr, pipelineInfo).value;
 
         // Cleanup shader modules after pipeline creation
         for (auto& shaderStage : shaderStages) {
@@ -297,7 +298,7 @@ struct pipeline::impl
 
     vk::DescriptorSet acquire_descriptor_set(const std::array<vk::ImageView, 4>& textures)
     {
-        auto descriptorSet = descriptorSets_[currentDescriptorSet_];
+        auto descriptorSet    = descriptorSets_[currentDescriptorSet_];
         currentDescriptorSet_ = (currentDescriptorSet_ + 1) % DescriptorPoolSize;
 
         vk::DescriptorImageInfo imageInfo{};
@@ -324,20 +325,21 @@ struct pipeline::impl
         return descriptorSet;
     }
 
-    //void draw(const draw_params& params)
+    // void draw(const draw_params& params)
     //{
-    //    commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline_);
-    //    commandBuffer.bindVertexBuffers(0, _vertexBuffer, {0});
-    //    commandBuffer.bindDescriptorSets(
-    //        vk::PipelineBindPoint::eGraphics, pipelineLayout_, 0, current_frame.descriptorSet, nullptr);
-    //    commandBuffer.pushConstants(
-    //        pipelineLayout_, vk::ShaderStageFlagBits::eFragment, 0, sizeof(default_uniforms), &default_uniforms);
-    //    commandBuffer.setViewport(0, viewport);
-    //    commandBuffer.setScissor(0, scissor);
-    //    commandBuffer.draw(4, 1, 0, 0);
-    //}
+    //     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline_);
+    //     commandBuffer.bindVertexBuffers(0, _vertexBuffer, {0});
+    //     commandBuffer.bindDescriptorSets(
+    //         vk::PipelineBindPoint::eGraphics, pipelineLayout_, 0, current_frame.descriptorSet, nullptr);
+    //     commandBuffer.pushConstants(
+    //         pipelineLayout_, vk::ShaderStageFlagBits::eFragment, 0, sizeof(default_uniforms), &default_uniforms);
+    //     commandBuffer.setViewport(0, viewport);
+    //     commandBuffer.setScissor(0, scissor);
+    //     commandBuffer.draw(4, 1, 0, 0);
+    // }
 
-    ~impl() {
+    ~impl()
+    {
         device_.destroyDescriptorPool(descriptorPool_);
         device_.destroyDescriptorSetLayout(descriptorSetLayout_);
         device_.destroySampler(textureSampler_);
@@ -345,8 +347,6 @@ struct pipeline::impl
         device_.destroyPipeline(pipeline_);
         device_.destroyPipelineLayout(pipelineLayout_);
     }
-
-
 };
 
 pipeline::pipeline(vk::Device device)
@@ -355,6 +355,6 @@ pipeline::pipeline(vk::Device device)
 }
 pipeline::~pipeline() {}
 
-vk::Pipeline   pipeline::id() const { return impl_->pipeline_; }
+vk::Pipeline pipeline::id() const { return impl_->pipeline_; }
 
 }}} // namespace caspar::accelerator::vulkan

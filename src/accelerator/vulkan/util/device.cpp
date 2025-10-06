@@ -196,19 +196,15 @@ struct device::impl : public std::enable_shared_from_this<impl>
         // Find suitable physical device
         auto gpu_selector = vkb::PhysicalDeviceSelector(_vkb_instance);
 
-        vk::PhysicalDeviceFeatures         feat;
-        feat.shaderFloat64 = true;
-
         vk::PhysicalDeviceVulkan13Features features;
         features.dynamicRendering = true;
         features.synchronization2 = true;
 
         vk::PhysicalDeviceRobustness2FeaturesEXT robustness2_features;
         robustness2_features.nullDescriptor = true;
-        
 
-        auto gpu_res = gpu_selector.set_minimum_version(1, 3)
-                           .set_required_features(feat)
+        auto gpu_res = gpu_selector
+                           .set_minimum_version(1, 3)
                            //.add_required_extensions({"VK_EXT_robustness2"})
                            //.add_required_extension_features(robustness2_features)
                            .set_required_features_13(features)
@@ -293,6 +289,24 @@ struct device::impl : public std::enable_shared_from_this<impl>
         return future;
     }
 
+    template <typename Func>
+    auto dispatch_async(Func&& func)
+    {
+        using result_type = decltype(func());
+        using task_type   = std::packaged_task<result_type()>;
+
+        auto task   = task_type(std::forward<Func>(func));
+        auto future = task.get_future();
+        boost::asio::dispatch(io_context_, std::move(task));
+        return future;
+    }
+
+    template <typename Func>
+    auto dispatch_sync(Func&& func) -> decltype(func())
+    {
+        return dispatch_async(std::forward<Func>(func)).get();
+    }
+
     void submit_render_pass(std::shared_ptr<texture> attachment, render_func&& func)
     {
         dispatch_async([=] {
@@ -310,7 +324,8 @@ struct device::impl : public std::enable_shared_from_this<impl>
                                   0.0f,
                                   1.0f};
 
-            vk::Extent2D extent = { static_cast<uint32_t>(attachment->width()), static_cast<uint32_t>(attachment->height()) };
+            vk::Extent2D extent = {static_cast<uint32_t>(attachment->width()),
+                                   static_cast<uint32_t>(attachment->height())};
             vk::Rect2D   scissor{{0, 0}, extent};
 
             // setup "renderpass" dynamically
@@ -338,27 +353,8 @@ struct device::impl : public std::enable_shared_from_this<impl>
     }
 
     std::shared_ptr<pipeline> create_pipeline()
-    { return dispatch_sync([&]() {
-            return std::make_shared<pipeline>(_device);
-        });
-    }
-
-    template <typename Func>
-    auto dispatch_async(Func&& func)
     {
-        using result_type = decltype(func());
-        using task_type   = std::packaged_task<result_type()>;
-
-        auto task   = task_type(std::forward<Func>(func));
-        auto future = task.get_future();
-        boost::asio::dispatch(io_context_, std::move(task));
-        return future;
-    }
-
-    template <typename Func>
-    auto dispatch_sync(Func&& func) -> decltype(func())
-    {
-        return dispatch_async(std::forward<Func>(func)).get();
+        return dispatch_sync([&]() { return std::make_shared<pipeline>(_device); });
     }
 
     std::wstring version() { return version_; }
@@ -374,18 +370,18 @@ struct device::impl : public std::enable_shared_from_this<impl>
         throw std::runtime_error("Failed to find suitable memory type");
     }
 
-template <typename T>
-using Res = std::pair<T, vk::DeviceMemory>;
+    template <typename T>
+    using Res = std::pair<T, vk::DeviceMemory>;
 
-    Res <vk::Buffer> upload_vertex_buffer()
+    void upload_vertex_buffer()
     {
         size_t size = sizeof(core::frame_geometry::coord) * 4;
         auto   data = core::frame_geometry::get_default().data().data();
 
         // staging buffer
         vk::BufferCreateInfo stagingInfo{};
-        stagingInfo.size       = size;
-        stagingInfo.usage      = vk::BufferUsageFlagBits::eTransferSrc;
+        stagingInfo.size        = size;
+        stagingInfo.usage       = vk::BufferUsageFlagBits::eTransferSrc;
         stagingInfo.sharingMode = vk::SharingMode::eExclusive;
 
         auto stagingBuffer = _device.createBuffer(stagingInfo);
@@ -395,8 +391,8 @@ using Res = std::pair<T, vk::DeviceMemory>;
         vk::MemoryAllocateInfo stagingAlloc{};
         stagingAlloc.allocationSize  = stagingMemReq.size;
         stagingAlloc.memoryTypeIndex = findDedicatedMemoryType(stagingMemReq.memoryTypeBits,
-                                                            vk::MemoryPropertyFlagBits::eHostVisible |
-                                                                vk::MemoryPropertyFlagBits::eHostCoherent);
+                                                               vk::MemoryPropertyFlagBits::eHostVisible |
+                                                                   vk::MemoryPropertyFlagBits::eHostCoherent);
 
         auto stagingBufferMemory = _device.allocateMemory(stagingAlloc);
         _device.bindBufferMemory(stagingBuffer, stagingBufferMemory, 0);
@@ -416,9 +412,9 @@ using Res = std::pair<T, vk::DeviceMemory>;
         auto memReq = _device.getBufferMemoryRequirements(vertexBuffer);
 
         vk::MemoryAllocateInfo allocInfo{};
-        allocInfo.allocationSize  = memReq.size;
-        allocInfo.memoryTypeIndex = findDedicatedMemoryType(memReq.memoryTypeBits,
-                                                            vk::MemoryPropertyFlagBits::eDeviceLocal);
+        allocInfo.allocationSize = memReq.size;
+        allocInfo.memoryTypeIndex =
+            findDedicatedMemoryType(memReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
 
         auto vertexBufferMemory = _device.allocateMemory(allocInfo);
         _device.bindBufferMemory(vertexBuffer, vertexBufferMemory, 0);
@@ -430,7 +426,6 @@ using Res = std::pair<T, vk::DeviceMemory>;
         _device.freeMemory(stagingBufferMemory);
         _device.destroyBuffer(stagingBuffer);
     }
-    
 
     std::shared_ptr<texture> create_attachment(int width, int height, common::bit_depth depth)
     {
@@ -820,13 +815,12 @@ device::device()
 }
 device::~device() {}
 
-void device::submit_render_pass(std::shared_ptr<texture> attachment, render_func&& func) {
+void device::submit_render_pass(std::shared_ptr<texture> attachment, render_func&& func)
+{
     impl_->submit_render_pass(attachment, std::move(func));
 }
 
-std::shared_ptr<pipeline> device::create_pipeline() { 
-    return impl_->create_pipeline(); 
-}
+std::shared_ptr<pipeline> device::create_pipeline() { return impl_->create_pipeline(); }
 
 std::shared_ptr<texture> device::create_attachment(int width, int height, common::bit_depth depth)
 {
