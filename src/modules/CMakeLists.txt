@@ -5,7 +5,11 @@ project("modules")
 add_subdirectory(ffmpeg)
 # add_subdirectory(oal)
 # add_subdirectory(decklink)
-# add_subdirectory(screen)
+
+if (NOT DEFINED APPLE)
+add_subdirectory(screen)
+endif()
+
 # add_subdirectory(newtek)
 # add_subdirectory(artnet)
 
