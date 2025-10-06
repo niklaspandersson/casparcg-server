@@ -34,6 +34,7 @@ class pipeline final
     explicit pipeline(vk::Device device);
     ~pipeline();
 
+    void draw(vk::CommandBuffer commandBuffer, vk::Buffer vertexBuffer, const std::array<vk::ImageView, 4>& textures);
     vk::Pipeline id() const;
 
   private:

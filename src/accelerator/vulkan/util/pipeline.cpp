@@ -307,14 +307,18 @@ struct pipeline::impl
         imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 
         std::vector<vk::DescriptorImageInfo> images(4, imageInfo);
-        images[0].imageView = textures[0];
-        images[1].imageView = textures[1];
-        images[2].imageView = textures[2];
-        images[3].imageView = textures[3];
+        images[0].imageView   = textures[0];
+        images[0].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        images[1].imageView   = textures[1];
+        images[1].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        images[2].imageView   = textures[2];
+        images[2].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        images[3].imageView   = textures[3];
+        images[3].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 
         vk::WriteDescriptorSet imageDescriptorWrite{};
         imageDescriptorWrite.dstSet          = descriptorSet;
-        imageDescriptorWrite.dstBinding      = 2;
+        imageDescriptorWrite.dstBinding      = 0;
         imageDescriptorWrite.dstArrayElement = 0;
         imageDescriptorWrite.descriptorType  = vk::DescriptorType::eCombinedImageSampler;
         imageDescriptorWrite.setImageInfo(images);
@@ -325,18 +329,16 @@ struct pipeline::impl
         return descriptorSet;
     }
 
-    // void draw(const draw_params& params)
-    //{
-    //     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline_);
-    //     commandBuffer.bindVertexBuffers(0, _vertexBuffer, {0});
-    //     commandBuffer.bindDescriptorSets(
-    //         vk::PipelineBindPoint::eGraphics, pipelineLayout_, 0, current_frame.descriptorSet, nullptr);
-    //     commandBuffer.pushConstants(
-    //         pipelineLayout_, vk::ShaderStageFlagBits::eFragment, 0, sizeof(default_uniforms), &default_uniforms);
-    //     commandBuffer.setViewport(0, viewport);
-    //     commandBuffer.setScissor(0, scissor);
-    //     commandBuffer.draw(4, 1, 0, 0);
-    // }
+    void draw(vk::CommandBuffer commandBuffer, vk::Buffer vertexBuffer, const std::array<vk::ImageView, 4>& textures)
+    {
+        auto descriptorSet = acquire_descriptor_set(textures);
+        commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline_);
+        commandBuffer.bindVertexBuffers(0, vertexBuffer, {0});
+        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout_, 0, descriptorSet, nullptr);
+        commandBuffer.pushConstants(
+            pipelineLayout_, vk::ShaderStageFlagBits::eFragment, 0, sizeof(default_uniforms), &default_uniforms);
+        commandBuffer.draw(4, 1, 0, 0);
+    }
 
     ~impl()
     {
@@ -354,6 +356,13 @@ pipeline::pipeline(vk::Device device)
 {
 }
 pipeline::~pipeline() {}
+
+void pipeline::draw(vk::CommandBuffer                   commandBuffer,
+                    vk::Buffer                          vertexBuffer,
+                    const std::array<vk::ImageView, 4>& textures)
+{
+    impl_->draw(commandBuffer, vertexBuffer, textures);
+}
 
 vk::Pipeline pipeline::id() const { return impl_->pipeline_; }
 

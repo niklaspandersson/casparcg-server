@@ -307,7 +307,8 @@ struct device::impl : public std::enable_shared_from_this<impl>
         return dispatch_async(std::forward<Func>(func)).get();
     }
 
-    void submit_render_pass(std::shared_ptr<texture> attachment, render_func&& func)
+    void submit_render_pass(std::shared_ptr<texture>                            attachment,
+                            std::function<void(vk::CommandBuffer, vk::Device)>& func)
     {
         dispatch_async([=] {
             auto cmd_buffer = _device.allocateCommandBuffers(
@@ -342,6 +343,8 @@ struct device::impl : public std::enable_shared_from_this<impl>
             rendering_info.setColorAttachments(attachment_info);
 
             cmd_buffer.beginRendering(rendering_info);
+            cmd_buffer.setViewport(0, viewport);
+            cmd_buffer.setScissor(0, scissor);
             func(cmd_buffer, _device);
             cmd_buffer.endRendering();
             cmd_buffer.end();
@@ -373,58 +376,67 @@ struct device::impl : public std::enable_shared_from_this<impl>
     template <typename T>
     using Res = std::pair<T, vk::DeviceMemory>;
 
-    void upload_vertex_buffer()
+    Res<vk::Buffer> upload_vertex_buffer()
     {
-        size_t size = sizeof(core::frame_geometry::coord) * 4;
-        auto   data = core::frame_geometry::get_default().data().data();
+        return dispatch_sync([&]() -> Res<vk::Buffer> {
+            auto data = reinterpret_cast<const double*>(core::frame_geometry::get_default().data().data());
 
-        // staging buffer
-        vk::BufferCreateInfo stagingInfo{};
-        stagingInfo.size        = size;
-        stagingInfo.usage       = vk::BufferUsageFlagBits::eTransferSrc;
-        stagingInfo.sharingMode = vk::SharingMode::eExclusive;
+            std::vector<float> fl;
+            std::transform(
+                data, data + 6 * 4, std::back_inserter(fl), [](double val) { return static_cast<float>(val); });
 
-        auto stagingBuffer = _device.createBuffer(stagingInfo);
+            size_t size = fl.size() * sizeof(float);
 
-        auto stagingMemReq = _device.getBufferMemoryRequirements(stagingBuffer);
+            // staging buffer
+            vk::BufferCreateInfo stagingInfo{};
+            stagingInfo.size        = size;
+            stagingInfo.usage       = vk::BufferUsageFlagBits::eTransferSrc;
+            stagingInfo.sharingMode = vk::SharingMode::eExclusive;
 
-        vk::MemoryAllocateInfo stagingAlloc{};
-        stagingAlloc.allocationSize  = stagingMemReq.size;
-        stagingAlloc.memoryTypeIndex = findDedicatedMemoryType(stagingMemReq.memoryTypeBits,
-                                                               vk::MemoryPropertyFlagBits::eHostVisible |
-                                                                   vk::MemoryPropertyFlagBits::eHostCoherent);
+            auto stagingBuffer = _device.createBuffer(stagingInfo);
 
-        auto stagingBufferMemory = _device.allocateMemory(stagingAlloc);
-        _device.bindBufferMemory(stagingBuffer, stagingBufferMemory, 0);
+            auto stagingMemReq = _device.getBufferMemoryRequirements(stagingBuffer);
 
-        void* dest = _device.mapMemory(stagingBufferMemory, 0, size);
-        memcpy(dest, data, size);
-        _device.unmapMemory(stagingBufferMemory);
+            vk::MemoryAllocateInfo stagingAlloc{};
+            stagingAlloc.allocationSize  = stagingMemReq.size;
+            stagingAlloc.memoryTypeIndex = findDedicatedMemoryType(stagingMemReq.memoryTypeBits,
+                                                                   vk::MemoryPropertyFlagBits::eHostVisible |
+                                                                       vk::MemoryPropertyFlagBits::eHostCoherent);
 
-        // vertex buffer
-        vk::BufferCreateInfo bufferInfo{};
-        bufferInfo.size        = size;
-        bufferInfo.usage       = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer;
-        bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+            auto stagingBufferMemory = _device.allocateMemory(stagingAlloc);
+            _device.bindBufferMemory(stagingBuffer, stagingBufferMemory, 0);
 
-        auto vertexBuffer = _device.createBuffer(bufferInfo);
+            void* dest = _device.mapMemory(stagingBufferMemory, 0, size);
+            memcpy(dest, fl.data(), size);
+            _device.unmapMemory(stagingBufferMemory);
 
-        auto memReq = _device.getBufferMemoryRequirements(vertexBuffer);
+            // vertex buffer
+            vk::BufferCreateInfo bufferInfo{};
+            bufferInfo.size        = size;
+            bufferInfo.usage       = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer;
+            bufferInfo.sharingMode = vk::SharingMode::eExclusive;
 
-        vk::MemoryAllocateInfo allocInfo{};
-        allocInfo.allocationSize = memReq.size;
-        allocInfo.memoryTypeIndex =
-            findDedicatedMemoryType(memReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+            auto vertexBuffer = _device.createBuffer(bufferInfo);
 
-        auto vertexBufferMemory = _device.allocateMemory(allocInfo);
-        _device.bindBufferMemory(vertexBuffer, vertexBufferMemory, 0);
+            auto memReq = _device.getBufferMemoryRequirements(vertexBuffer);
 
-        submitSingleTimeCommands(_device, _command_pool, _queue, [&](vk::CommandBuffer cmd) {
-            cmd.copyBuffer(stagingBuffer, vertexBuffer, vk::BufferCopy(0, 0, size));
+            vk::MemoryAllocateInfo allocInfo{};
+            allocInfo.allocationSize = memReq.size;
+            allocInfo.memoryTypeIndex =
+                findDedicatedMemoryType(memReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+            auto vertexBufferMemory = _device.allocateMemory(allocInfo);
+            _device.bindBufferMemory(vertexBuffer, vertexBufferMemory, 0);
+
+            submitSingleTimeCommands(_device, _command_pool, _queue, [&](vk::CommandBuffer cmd) {
+                cmd.copyBuffer(stagingBuffer, vertexBuffer, vk::BufferCopy(0, 0, size));
+            });
+
+            _device.freeMemory(stagingBufferMemory);
+            _device.destroyBuffer(stagingBuffer);
+
+            return {vertexBuffer, vertexBufferMemory};
         });
-
-        _device.freeMemory(stagingBufferMemory);
-        _device.destroyBuffer(stagingBuffer);
     }
 
     std::shared_ptr<texture> create_attachment(int width, int height, common::bit_depth depth)
@@ -815,10 +827,12 @@ device::device()
 }
 device::~device() {}
 
-void device::submit_render_pass(std::shared_ptr<texture> attachment, render_func&& func)
+void device::submit_render_pass(std::shared_ptr<texture>                            attachment,
+                                std::function<void(vk::CommandBuffer, vk::Device)>& func)
 {
-    impl_->submit_render_pass(attachment, std::move(func));
+    impl_->submit_render_pass(attachment, func);
 }
+std::pair<vk::Buffer, vk::DeviceMemory> device::upload_vertex_buffer() { return impl_->upload_vertex_buffer(); }
 
 std::shared_ptr<pipeline> device::create_pipeline() { return impl_->create_pipeline(); }
 

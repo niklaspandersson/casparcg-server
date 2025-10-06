@@ -74,23 +74,25 @@ bool is_outside_screen(const std::vector<core::frame_geometry::coord>& coords)
 
 static const double epsilon = 0.001;
 
-
 struct image_kernel::impl
 {
-    spl::shared_ptr<device> vulkan_;
+    spl::shared_ptr<device>   vulkan_;
     std::shared_ptr<pipeline> pipeline_;
+    vk::Buffer                vertexBuffer_;
+    vk::DeviceMemory          vertexBufferMemory_;
 
     explicit impl(const spl::shared_ptr<device>& vulkan)
         : vulkan_(vulkan)
     {
-        pipeline_ = vulkan_->create_pipeline();
+        pipeline_                               = vulkan_->create_pipeline();
+        auto [vertexBuffer, vertexBufferMemory] = vulkan_->upload_vertex_buffer();
+        vertexBuffer_                           = vertexBuffer;
+        vertexBufferMemory_                     = vertexBufferMemory;
     }
 
     ~impl()
     {
-        vulkan_->dispatch_sync([&] {
-            pipeline_.reset();
-        });
+        vulkan_->dispatch_sync([&] { pipeline_.reset(); });
     }
 
     void draw(draw_params params)
@@ -177,19 +179,19 @@ struct image_kernel::impl
             // params.layer_key->bind(static_cast<int>(texture_id::layer_key));
         }
 
-        //const auto is_hd       = params.pix_desc.planes.at(0).height > 700;
-        //const auto color_space = is_hd ? params.pix_desc.color_space : core::color_space::bt601;
+        // const auto is_hd       = params.pix_desc.planes.at(0).height > 700;
+        // const auto color_space = is_hd ? params.pix_desc.color_space : core::color_space::bt601;
 
-        //const float color_matrices[3][9] = {
-        //    {1.0, 0.0, 1.402, 1.0, -0.344, -0.509, 1.0, 1.772, 0.0},                          // bt.601
-        //    {1.0, 0.0, 1.5748, 1.0, -0.1873, -0.4681, 1.0, 1.8556, 0.0},                      // bt.709
-        //    {1.0, 0.0, 1.4746, 1.0, -0.16455312684366, -0.57135312684366, 1.0, 1.8814, 0.0}}; // bt.2020
-        //const auto color_matrix = color_matrices[static_cast<int>(color_space)];
+        // const float color_matrices[3][9] = {
+        //     {1.0, 0.0, 1.402, 1.0, -0.344, -0.509, 1.0, 1.772, 0.0},                          // bt.601
+        //     {1.0, 0.0, 1.5748, 1.0, -0.1873, -0.4681, 1.0, 1.8556, 0.0},                      // bt.709
+        //     {1.0, 0.0, 1.4746, 1.0, -0.16455312684366, -0.57135312684366, 1.0, 1.8814, 0.0}}; // bt.2020
+        // const auto color_matrix = color_matrices[static_cast<int>(color_space)];
 
-        //const float luma_coefficients[3][3] = {{0.299, 0.587, 0.114},     // bt.601
-        //                                       {0.2126, 0.7152, 0.0722},  // bt.709
-        //                                       {0.2627, 0.6780, 0.0593}}; // bt.2020
-        //const auto  luma_coeff              = luma_coefficients[static_cast<int>(color_space)];
+        // const float luma_coefficients[3][3] = {{0.299, 0.587, 0.114},     // bt.601
+        //                                        {0.2126, 0.7152, 0.0722},  // bt.709
+        //                                        {0.2627, 0.6780, 0.0593}}; // bt.2020
+        // const auto  luma_coeff              = luma_coefficients[static_cast<int>(color_space)];
 
         // Setup shader
         // shader_->use();
@@ -270,10 +272,19 @@ struct image_kernel::impl
 
         // Setup drawing area
 
-        vulkan_->submit_render_pass(
-            params.background,
-            [](vk::CommandBuffer cmd_buf, vk::Device device) {
-            });
+        std::array<vk::ImageView, 4> textures = {nullptr, nullptr, nullptr, nullptr};
+        if (params.textures.size() > 0)
+            textures[0] = params.textures[0]->view();
+        if (params.textures.size() > 1)
+            textures[1] = params.textures[1]->view();
+        if (params.textures.size() > 2)
+            textures[2] = params.textures[2]->view();
+        if (params.textures.size() > 3)
+            textures[3] = params.textures[3]->view();
+
+        vulkan_->submit_render_pass(params.background, [=](vk::CommandBuffer cmd_buf, vk::Device device) {
+            pipeline_->draw(cmd_buf, vertexBuffer_, textures);
+        });
 
         // GL(glViewport(0, 0, params.background->width(), params.background->height()));
         // glDisable(GL_DEPTH_TEST);
