@@ -23,6 +23,10 @@ if (MSVC)
 			shell.rc
 			windows_specific.cpp
 	)
+elseif(APPLE)
+	list(APPEND SOURCES
+			macos_specific.cpp
+	)
 else ()
 	list(APPEND SOURCES
 			linux_specific.cpp
@@ -53,8 +57,10 @@ target_link_libraries(casparcg
 
 		TBB::tbb
 		TBB::tbbmalloc
-		GLEW::glew
 )
+if(NOT APPLE)
+    target_link_libraries(casparcg GLEW::glew)
+endif()
 
 if(ENABLE_VULKAN)
 	target_link_libraries(casparcg Vulkan::Vulkan)
@@ -79,6 +85,14 @@ if (MSVC)
 		swscale.lib
 		swresample.lib
 	)
+elseif(APPLE)
+		target_link_libraries(casparcg
+		${Boost_LIBRARIES}
+		${FFMPEG_LIBRARIES}
+		OpenAL::OpenAL
+		dl
+		pthread
+	)
 else ()
 	target_link_libraries(casparcg
 		${Boost_LIBRARIES}
@@ -92,7 +106,6 @@ else ()
 		icuuc
 		z
 		pthread
-        OpenGL::OpenGL OpenGL::EGL
 	)
 endif ()
 
