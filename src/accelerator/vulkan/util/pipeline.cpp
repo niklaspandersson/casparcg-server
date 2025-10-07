@@ -281,7 +281,7 @@ struct pipeline::impl
         auto shaderStages = std::move(create_shader_program(device_));
         pipelineInfo.setStages(shaderStages);
 
-        vk::Format                      swapchain_image_format = vk::Format::eB8G8R8A8Unorm;
+        vk::Format                      swapchain_image_format = vk::Format::eR8G8B8A8Unorm;
         vk::PipelineRenderingCreateInfo rendering_info{};
         rendering_info.colorAttachmentCount    = 1;
         rendering_info.pColorAttachmentFormats = &swapchain_image_format;
@@ -323,7 +323,31 @@ struct pipeline::impl
         imageDescriptorWrite.descriptorType  = vk::DescriptorType::eCombinedImageSampler;
         imageDescriptorWrite.setImageInfo(images);
 
-        vk::WriteDescriptorSet descriptorWrites[]{imageDescriptorWrite};
+        vk::WriteDescriptorSet backgroundDescriptorWrite{};
+        backgroundDescriptorWrite.dstSet     = descriptorSet;
+        backgroundDescriptorWrite.dstBinding = 1;
+        backgroundDescriptorWrite.dstArrayElement = 0;
+        backgroundDescriptorWrite.descriptorType  = vk::DescriptorType::eCombinedImageSampler;
+        backgroundDescriptorWrite.setImageInfo(images);
+        backgroundDescriptorWrite.descriptorCount = 1;
+
+        vk::WriteDescriptorSet keyDescriptorWrite{};
+        keyDescriptorWrite.dstSet                 = descriptorSet;
+        keyDescriptorWrite.dstBinding             = 2;
+        keyDescriptorWrite.dstArrayElement        = 0;
+        keyDescriptorWrite.descriptorType         = vk::DescriptorType::eCombinedImageSampler;
+        keyDescriptorWrite.setImageInfo(images);
+        keyDescriptorWrite.descriptorCount = 1;
+
+        vk::WriteDescriptorSet mixDescriptorWrite{};
+        mixDescriptorWrite.dstSet            = descriptorSet;
+        mixDescriptorWrite.dstBinding        = 3;
+        mixDescriptorWrite.dstArrayElement   = 0;
+        mixDescriptorWrite.descriptorType    = vk::DescriptorType::eCombinedImageSampler;
+        mixDescriptorWrite.setImageInfo(images);
+        mixDescriptorWrite.descriptorCount = 1;
+
+        vk::WriteDescriptorSet descriptorWrites[]{imageDescriptorWrite, backgroundDescriptorWrite, keyDescriptorWrite, mixDescriptorWrite};
         device_.updateDescriptorSets(descriptorWrites, nullptr);
 
         return descriptorSet;

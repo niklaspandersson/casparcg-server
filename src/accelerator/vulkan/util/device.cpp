@@ -307,8 +307,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
         return dispatch_async(std::forward<Func>(func)).get();
     }
 
-    void submit_render_pass(std::shared_ptr<texture>                            attachment,
-                            std::function<void(vk::CommandBuffer, vk::Device)>& func)
+    void submit_render_pass(std::shared_ptr<texture> attachment, draw_params* params, drawable* drawable)
     {
         dispatch_async([=] {
             auto cmd_buffer = _device.allocateCommandBuffers(
@@ -345,13 +344,14 @@ struct device::impl : public std::enable_shared_from_this<impl>
             cmd_buffer.beginRendering(rendering_info);
             cmd_buffer.setViewport(0, viewport);
             cmd_buffer.setScissor(0, scissor);
-            func(cmd_buffer, _device);
+            drawable->draw(cmd_buffer, params, _device);
             cmd_buffer.endRendering();
             cmd_buffer.end();
 
             vk::SubmitInfo2 submit_info;
             submit_info.setCommandBufferInfos(vk::CommandBufferSubmitInfo().setCommandBuffer(cmd_buffer));
             _queue.submit2(submit_info);
+            _device.waitIdle();
         });
     }
 
@@ -827,10 +827,9 @@ device::device()
 }
 device::~device() {}
 
-void device::submit_render_pass(std::shared_ptr<texture>                            attachment,
-                                std::function<void(vk::CommandBuffer, vk::Device)>& func)
+void device::submit_render_pass(std::shared_ptr<texture> attachment, draw_params* params, drawable* drawable)
 {
-    impl_->submit_render_pass(attachment, func);
+    impl_->submit_render_pass(attachment, params, drawable);
 }
 std::pair<vk::Buffer, vk::DeviceMemory> device::upload_vertex_buffer() { return impl_->upload_vertex_buffer(); }
 

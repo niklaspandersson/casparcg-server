@@ -52,13 +52,13 @@ layout(push_constant) uniform ParamsBlock {
 };
 
 bool is_straight_alpha = (flags & is_straight_alpha_mask) == is_straight_alpha_mask;
-bool has_local_key = (flags & has_local_key_mask) == has_local_key_mask;
-bool has_layer_key  = (flags & has_layer_key_mask) == has_layer_key_mask;
-bool invert = (flags & invert_mask) == invert_mask;
-bool levels = (flags & levels_mask) == levels_mask;
-bool csb = (flags & csb_mask) == csb_mask;
-bool chroma = (flags & chroma_mask) == chroma_mask;
-bool chroma_show_mask = (flags & chroma_show_mask_mask) == chroma_show_mask_mask;
+bool has_local_key = false;// (flags & has_local_key_mask) == has_local_key_mask;
+bool has_layer_key  = false;// (flags & has_layer_key_mask) == has_layer_key_mask;
+bool invert = false; //(flags & invert_mask) == invert_mask;
+bool levels = false; //(flags & levels_mask) == levels_mask;
+bool csb = false; //(flags & csb_mask) == csb_mask;
+bool chroma = false; //(flags & chroma_mask) == chroma_mask;
+bool chroma_show_mask = false; // (flags & chroma_show_mask_mask) == chroma_show_mask_mask;
 
 const mat3[3] color_matrices = mat3[3](
                     mat3(1.0, 0.0, 1.402, 1.0, -0.344, -0.509, 1.0, 1.772, 0.0),
@@ -417,7 +417,7 @@ vec4 ChromaOnCustomColor(vec4 c)
 
 vec3 get_blend_color(vec3 back, vec3 fore)
 {
-    switch(blend_mode)
+    switch(0)
     {
     case  0: return BlendNormal(back, fore);
     case  1: return BlendLighten(back, fore);

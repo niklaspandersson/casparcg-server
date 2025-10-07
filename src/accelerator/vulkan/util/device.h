@@ -32,7 +32,14 @@
 
 namespace caspar { namespace accelerator { namespace vulkan {
 
-using render_func = void (*)(vk::CommandBuffer, vk::Device); // std::add_pointer_t<void(vk::CommandBuffer, vk::Device)>;
+using render_func = std::add_pointer_t<void(vk::CommandBuffer, vk::Device)>;
+
+struct draw_params;
+
+struct drawable
+{
+    virtual void draw(vk::CommandBuffer commandBuffer, draw_params* params, vk::Device device) = 0;
+};
 
 class device final
     : public std::enable_shared_from_this<device>
@@ -46,8 +53,7 @@ class device final
 
     device& operator=(const device&) = delete;
 
-    void                                    submit_render_pass(std::shared_ptr<class texture>                      attachment,
-                                                               std::function<void(vk::CommandBuffer, vk::Device)>& func);
+    void                                    submit_render_pass(std::shared_ptr<class texture>  attachment, draw_params* params, drawable* drawable);
     std::shared_ptr<class pipeline>         create_pipeline();
     std::pair<vk::Buffer, vk::DeviceMemory> upload_vertex_buffer();
 

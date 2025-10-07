@@ -74,7 +74,7 @@ bool is_outside_screen(const std::vector<core::frame_geometry::coord>& coords)
 
 static const double epsilon = 0.001;
 
-struct image_kernel::impl
+struct image_kernel::impl : public drawable
 {
     spl::shared_ptr<device>   vulkan_;
     std::shared_ptr<pipeline> pipeline_;
@@ -272,19 +272,7 @@ struct image_kernel::impl
 
         // Setup drawing area
 
-        std::array<vk::ImageView, 4> textures = {nullptr, nullptr, nullptr, nullptr};
-        if (params.textures.size() > 0)
-            textures[0] = params.textures[0]->view();
-        if (params.textures.size() > 1)
-            textures[1] = params.textures[1]->view();
-        if (params.textures.size() > 2)
-            textures[2] = params.textures[2]->view();
-        if (params.textures.size() > 3)
-            textures[3] = params.textures[3]->view();
-
-        vulkan_->submit_render_pass(params.background, [=](vk::CommandBuffer cmd_buf, vk::Device device) {
-            pipeline_->draw(cmd_buf, vertexBuffer_, textures);
-        });
+        vulkan_->submit_render_pass(params.background, &params, this);
 
         // GL(glViewport(0, 0, params.background->width(), params.background->height()));
         // glDisable(GL_DEPTH_TEST);
@@ -324,6 +312,20 @@ struct image_kernel::impl
         // Cleanup
         // GL(glDisable(GL_SCISSOR_TEST));
         // GL(glDisable(GL_BLEND));
+    }
+
+    void draw(vk::CommandBuffer commandBuffer, draw_params *params, vk::Device device) override
+    {
+        std::array<vk::ImageView, 4> textures = {nullptr, nullptr, nullptr, nullptr};
+        if (params->textures.size() > 0)
+            textures[0] = params->textures[0]->view();
+        if (params->textures.size() > 1)
+            textures[1] = params->textures[1]->view();
+        if (params->textures.size() > 2)
+            textures[2] = params->textures[2]->view();
+        if (params->textures.size() > 3)
+            textures[3] = params->textures[3]->view();
+        pipeline_->draw(commandBuffer, vertexBuffer_, textures);
     }
 };
 
