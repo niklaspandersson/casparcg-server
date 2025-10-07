@@ -353,7 +353,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
             cmd_buffer.endRendering();
             cmd_buffer.end();
 
-            vk::SubmitInfo submit_info {};
+            vk::SubmitInfo submit_info{};
             submit_info.setCommandBuffers(cmd_buffer);
 
             // vk::SubmitInfo2 submit_info{};
@@ -374,7 +374,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
     {
         auto memProperties = _physical_device.getMemoryProperties();
         for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i) {
-            if ((typeMask & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags == properties)) {
+            if ((typeMask & (1 << i)) && ((memProperties.memoryTypes[i].propertyFlags & properties) == properties)) {
                 return i;
             }
         }
@@ -391,8 +391,8 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
             std::vector<float> fl{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 2.0f, 1.0f, 0.0f, 2.0f, 0.0f, 0.0f, 2.0f,
                                   1.0f, 1.0f, 2.0f, 2.0f, 0.0f, 2.0f, 0.0f, 1.0f, 0.0f, 2.0f, 0.0f, 2.0f};
-            //std::transform(
-            //    data, data + 6 * 4, std::back_inserter(fl), [](double val) { return static_cast<float>(val); });
+            // std::transform(
+            //     data, data + 6 * 4, std::back_inserter(fl), [](double val) { return static_cast<float>(val); });
 
             size_t size = fl.size() * sizeof(float);
 
@@ -454,7 +454,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
         auto depth_pool_index = depth == common::bit_depth::bit8 ? 0 : 1;
         auto format = vk::Format::eB8G8R8A8Unorm; // depth == common::bit_depth::bit8 ? vk::Format::eR8G8B8A8Unorm :
-                                                 // vk::Format::eR16G16B16A16Unorm;
+                                                  // vk::Format::eR16G16B16A16Unorm;
 
         // TODO (perf) Shared pool.
         auto pool   = &attachment_pools_[depth_pool_index][(width << 16 & 0xFFFF0000) | (height & 0x0000FFFF)];
@@ -498,15 +498,15 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
         submitSingleTimeCommands(_device, _command_pool, _queue, [&](vk::CommandBuffer cmd) {
             transitionImageLayout(tex->id(),
-                                    format,
-                                    vk::ImageLayout::eUndefined,
-                                    vk::AccessFlagBits2::eNone,
-                                    vk::PipelineStageFlagBits2::eTopOfPipe,
+                                  format,
+                                  vk::ImageLayout::eUndefined,
+                                  vk::AccessFlagBits2::eNone,
+                                  vk::PipelineStageFlagBits2::eTopOfPipe,
 
-                                    vk::ImageLayout::eColorAttachmentOptimal,
-                                    vk::AccessFlagBits2::eColorAttachmentWrite,
-                                    vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                                    cmd);
+                                  vk::ImageLayout::eColorAttachmentOptimal,
+                                  vk::AccessFlagBits2::eColorAttachmentWrite,
+                                  vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                                  cmd);
         });
 
         tex->set_depth(depth);
@@ -697,31 +697,27 @@ struct device::impl : public std::enable_shared_from_this<impl>
                 vk::Extent3D{static_cast<uint32_t>(source->width()), static_cast<uint32_t>(source->height()), 1};
             copyInfo.setRegions(region);
 
-           // auto fence = _device.createFence(vk::FenceCreateInfo());
+            // auto fence = _device.createFence(vk::FenceCreateInfo());
 
-            submitSingleTimeCommands(
-                _device,
-                _command_pool,
-                _queue,
-                [&](vk::CommandBuffer cmd) {
-                    transitionImageLayout(source->id(),
-                                          vk::Format::eR8G8B8A8Unorm,
-                                          vk::ImageLayout::eColorAttachmentOptimal,
-                                          vk::AccessFlagBits2::eColorAttachmentWrite,
-                                          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            submitSingleTimeCommands(_device, _command_pool, _queue, [&](vk::CommandBuffer cmd) {
+                transitionImageLayout(source->id(),
+                                      vk::Format::eR8G8B8A8Unorm,
+                                      vk::ImageLayout::eColorAttachmentOptimal,
+                                      vk::AccessFlagBits2::eColorAttachmentWrite,
+                                      vk::PipelineStageFlagBits2::eColorAttachmentOutput,
 
-                                          vk::ImageLayout::eTransferSrcOptimal,
-                                          vk::AccessFlagBits2::eHostRead,
-                                          vk::PipelineStageFlagBits2::eHost,
-                                          cmd);
-                    cmd.copyImageToBuffer2(copyInfo);
-                });
+                                      vk::ImageLayout::eTransferSrcOptimal,
+                                      vk::AccessFlagBits2::eHostRead,
+                                      vk::PipelineStageFlagBits2::eHost,
+                                      cmd);
+                cmd.copyImageToBuffer2(copyInfo);
+            });
 
-            //deadline_timer timer(io_context_);
-            //for (auto n = 0; true; ++n) {
-            //    // TODO (perf) Smarter non-polling solution?
-            //    timer.expires_from_now(boost::posix_time::milliseconds(2));
-            //    timer.async_wait(yield);
+            // deadline_timer timer(io_context_);
+            // for (auto n = 0; true; ++n) {
+            //     // TODO (perf) Smarter non-polling solution?
+            //     timer.expires_from_now(boost::posix_time::milliseconds(2));
+            //     timer.async_wait(yield);
 
             //    auto wait = _device.waitForFences(fence, VK_TRUE, 0);
             //    if (wait == vk::Result::eSuccess) {
