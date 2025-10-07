@@ -62,8 +62,7 @@ std::vector<vk::PipelineShaderStageCreateInfo> create_shader_program(vk::Device 
 std::array<vk::VertexInputAttributeDescription, 2> get_attribute_descriptions(uint32_t binding)
 {
     std::array<vk::VertexInputAttributeDescription, 2> attributeDescriptions{
-        {{0, binding, vk::Format::eR32G32Sfloat, offsetof(core::frame_geometry::coord, vertex_x) / 2},
-         {1, binding, vk::Format::eR32G32B32A32Sfloat, offsetof(core::frame_geometry::coord, texture_x) / 2}}};
+        {{0, binding, vk::Format::eR32G32Sfloat, 0}, {1, binding, vk::Format::eR32G32B32A32Sfloat, 2 * sizeof(float)}}};
 
     return attributeDescriptions;
 }
@@ -72,12 +71,12 @@ const int DescriptorPoolSize = 10;
 
 struct uniform_block
 {
-    uint32_t color_space_index;
-    float    precision_factor[4];
-    int32_t  blend_mode;
-    int32_t  keyer;
-    int32_t  pixel_format;
-    float    opacity;
+    uint32_t color_space_index = 2;
+    float    precision_factor[4] = {64.0f, 64.0f, 64.0f, 1.0f};
+    int32_t  blend_mode = 0;
+    int32_t  keyer = 0;
+    int32_t  pixel_format = 5;
+    float    opacity = 1.0;
 
     /* levels */
     float min_input;
@@ -87,9 +86,9 @@ struct uniform_block
     float max_output;
 
     /* contrast, saturation & brightness */
-    float brt;
-    float sat;
-    float con;
+    float brt = 0;
+    float sat = 0;
+    float con = 0;
 
     /* Chroma */
     float chroma_target_hue;
@@ -100,7 +99,7 @@ struct uniform_block
     float chroma_spill_suppress;
     float chroma_spill_suppress_saturation;
 
-    uint32_t flags;
+    uint32_t flags = 0;
 } default_uniforms;
 
 struct pipeline::impl
@@ -208,15 +207,14 @@ struct pipeline::impl
         // Vertex input
         auto attributeDescriptions = get_attribute_descriptions(0);
 
-        auto vertexBindings =
-            vk::VertexInputBindingDescription(0, sizeof(core::frame_geometry::coord), vk::VertexInputRate::eVertex);
+        auto vertexBindings = vk::VertexInputBindingDescription(0, sizeof(float)*6, vk::VertexInputRate::eVertex);
         vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
         vertexInputInfo.setVertexBindingDescriptions(vertexBindings);
         vertexInputInfo.setVertexAttributeDescriptions(attributeDescriptions);
 
         // Input assembly
         vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
-        inputAssembly.topology               = vk::PrimitiveTopology::eTriangleStrip;
+        inputAssembly.topology               = vk::PrimitiveTopology::eTriangleFan;
         inputAssembly.primitiveRestartEnable = VK_TRUE;
 
         vk::PipelineViewportStateCreateInfo viewportState{};
@@ -229,7 +227,7 @@ struct pipeline::impl
         rasterizer.depthClampEnable        = VK_FALSE;
         rasterizer.rasterizerDiscardEnable = VK_FALSE;
         rasterizer.polygonMode             = vk::PolygonMode::eFill;
-        rasterizer.cullMode                = vk::CullModeFlagBits::eBack;
+        rasterizer.cullMode                = vk::CullModeFlagBits::eNone;
         rasterizer.frontFace               = vk::FrontFace::eClockwise;
         rasterizer.depthBiasEnable         = VK_FALSE;
         rasterizer.lineWidth               = 1.0f;
@@ -281,7 +279,7 @@ struct pipeline::impl
         auto shaderStages = std::move(create_shader_program(device_));
         pipelineInfo.setStages(shaderStages);
 
-        vk::Format                      swapchain_image_format = vk::Format::eR8G8B8A8Unorm;
+        vk::Format                      swapchain_image_format = vk::Format::eB8G8R8A8Unorm;
         vk::PipelineRenderingCreateInfo rendering_info{};
         rendering_info.colorAttachmentCount    = 1;
         rendering_info.pColorAttachmentFormats = &swapchain_image_format;
@@ -308,13 +306,9 @@ struct pipeline::impl
 
         std::vector<vk::DescriptorImageInfo> images(4, imageInfo);
         images[0].imageView   = textures[0];
-        images[0].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
         images[1].imageView   = textures[1];
-        images[1].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
         images[2].imageView   = textures[2];
-        images[2].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
         images[3].imageView   = textures[3];
-        images[3].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 
         vk::WriteDescriptorSet imageDescriptorWrite{};
         imageDescriptorWrite.dstSet          = descriptorSet;
@@ -322,6 +316,7 @@ struct pipeline::impl
         imageDescriptorWrite.dstArrayElement = 0;
         imageDescriptorWrite.descriptorType  = vk::DescriptorType::eCombinedImageSampler;
         imageDescriptorWrite.setImageInfo(images);
+        imageDescriptorWrite.descriptorCount = 4;
 
         vk::WriteDescriptorSet backgroundDescriptorWrite{};
         backgroundDescriptorWrite.dstSet     = descriptorSet;

@@ -316,7 +316,10 @@ struct image_kernel::impl : public drawable
 
     void draw(vk::CommandBuffer commandBuffer, draw_params *params, vk::Device device) override
     {
-        std::array<vk::ImageView, 4> textures = {nullptr, nullptr, nullptr, nullptr};
+        std::array<vk::ImageView, 4> textures = {params->textures[0]->view(),
+                                                 params->textures[0]->view(),
+                                                 params->textures[0]->view(),
+                                                 params->textures[0]->view()};
         if (params->textures.size() > 0)
             textures[0] = params->textures[0]->view();
         if (params->textures.size() > 1)

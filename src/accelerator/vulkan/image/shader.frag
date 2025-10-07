@@ -52,13 +52,13 @@ layout(push_constant) uniform ParamsBlock {
 };
 
 bool is_straight_alpha = (flags & is_straight_alpha_mask) == is_straight_alpha_mask;
-bool has_local_key = false;// (flags & has_local_key_mask) == has_local_key_mask;
-bool has_layer_key  = false;// (flags & has_layer_key_mask) == has_layer_key_mask;
-bool invert = false; //(flags & invert_mask) == invert_mask;
-bool levels = false; //(flags & levels_mask) == levels_mask;
-bool csb = false; //(flags & csb_mask) == csb_mask;
-bool chroma = false; //(flags & chroma_mask) == chroma_mask;
-bool chroma_show_mask = false; // (flags & chroma_show_mask_mask) == chroma_show_mask_mask;
+bool has_local_key = (flags & has_local_key_mask) == has_local_key_mask;
+bool has_layer_key  = (flags & has_layer_key_mask) == has_layer_key_mask;
+bool invert = (flags & invert_mask) == invert_mask;
+bool levels = (flags & levels_mask) == levels_mask;
+bool csb = (flags & csb_mask) == csb_mask;
+bool chroma = (flags & chroma_mask) == chroma_mask;
+bool chroma_show_mask = (flags & chroma_show_mask_mask) == chroma_show_mask_mask;
 
 const mat3[3] color_matrices = mat3[3](
                     mat3(1.0, 0.0, 1.402, 1.0, -0.344, -0.509, 1.0, 1.772, 0.0),
@@ -71,7 +71,7 @@ const vec3[3] luma_coefficients = vec3[3](
                     vec3(0.2627, 0.6780, 0.0593)   // Rec. 2020
                 );
 
-mat3 color_matrix = color_matrices[color_space_index];
+mat3 color_matrix = transpose(color_matrices[color_space_index]);
 vec3 luma_coeff = luma_coefficients[color_space_index];
 
 /*
@@ -417,7 +417,7 @@ vec4 ChromaOnCustomColor(vec4 c)
 
 vec3 get_blend_color(vec3 back, vec3 fore)
 {
-    switch(0)
+    switch(blend_mode)
     {
     case  0: return BlendNormal(back, fore);
     case  1: return BlendLighten(back, fore);
@@ -454,14 +454,15 @@ vec3 get_blend_color(vec3 back, vec3 fore)
 
 vec4 blend(vec4 fore)
 {
-    vec4 back = texture(background, TexCoord2.st).bgra;
-    if(blend_mode != 0)
-        fore.rgb = get_blend_color(back.rgb/(back.a+0.0000001), fore.rgb/(fore.a+0.0000001))*fore.a;
-    switch(keyer)
-    {
-        case 1:  return fore + back; // additive
-        default: return fore + (1.0-fore.a)*back; // linear
-    }
+    return fore;
+   //  vec4 back = texture(background, TexCoord2.st).bgra;
+   //  if(blend_mode != 0)
+   //     fore.rgb = get_blend_color(back.rgb/(back.a+0.0000001), fore.rgb/(fore.a+0.0000001))*fore.a;
+   // switch(keyer)
+   // {
+   //     case 1:  return fore + back; // additive
+   //     default: return fore + (1.0-fore.a)*back; // linear
+   // }
 }
 
 vec4 chroma_key(vec4 c)

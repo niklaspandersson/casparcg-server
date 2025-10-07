@@ -196,9 +196,13 @@ struct device::impl : public std::enable_shared_from_this<impl>
         // Find suitable physical device
         auto gpu_selector = vkb::PhysicalDeviceSelector(_vkb_instance);
 
-        vk::PhysicalDeviceVulkan13Features features;
-        features.dynamicRendering = true;
-        features.synchronization2 = true;
+        vk::PhysicalDeviceVulkan13Features features13;
+        features13.dynamicRendering = true;
+        features13.synchronization2 = true;
+
+        vk::PhysicalDeviceVulkan12Features features12;
+        features12.descriptorIndexing              = true;
+        features12.descriptorBindingPartiallyBound = true;
 
         vk::PhysicalDeviceRobustness2FeaturesEXT robustness2_features;
         robustness2_features.nullDescriptor = true;
@@ -207,7 +211,8 @@ struct device::impl : public std::enable_shared_from_this<impl>
                            .set_minimum_version(1, 3)
                            //.add_required_extensions({"VK_EXT_robustness2"})
                            //.add_required_extension_features(robustness2_features)
-                           .set_required_features_13(features)
+                           .set_required_features_12(features12)
+                           .set_required_features_13(features13)
                            .select();
         if (!gpu_res) {
             CASPAR_THROW_EXCEPTION(caspar_exception()
@@ -314,7 +319,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
                 vk::CommandBufferAllocateInfo(_command_pool, vk::CommandBufferLevel::ePrimary, 1))[0];
             cmd_buffer.begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
-            vk::ClearValue clearColor{vk::ClearColorValue(std::array<float, 4>{0.0f, 1.0f, 0.0f, 1.0f})};
+            vk::ClearValue clearColor{vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f})};
 
             // Viewport and scissor
             vk::Viewport viewport{0.0f,
@@ -348,9 +353,12 @@ struct device::impl : public std::enable_shared_from_this<impl>
             cmd_buffer.endRendering();
             cmd_buffer.end();
 
-            vk::SubmitInfo2 submit_info;
-            submit_info.setCommandBufferInfos(vk::CommandBufferSubmitInfo().setCommandBuffer(cmd_buffer));
-            _queue.submit2(submit_info);
+            vk::SubmitInfo submit_info {};
+            submit_info.setCommandBuffers(cmd_buffer);
+
+            // vk::SubmitInfo2 submit_info{};
+            // submit_info.setCommandBufferInfos(vk::CommandBufferSubmitInfo().setCommandBuffer(cmd_buffer));
+            _queue.submit(submit_info);
             _device.waitIdle();
         });
     }
@@ -379,11 +387,12 @@ struct device::impl : public std::enable_shared_from_this<impl>
     Res<vk::Buffer> upload_vertex_buffer()
     {
         return dispatch_sync([&]() -> Res<vk::Buffer> {
-            auto data = reinterpret_cast<const double*>(core::frame_geometry::get_default().data().data());
+            // auto data = reinterpret_cast<const double*>(core::frame_geometry::get_default().data().data());
 
-            std::vector<float> fl;
-            std::transform(
-                data, data + 6 * 4, std::back_inserter(fl), [](double val) { return static_cast<float>(val); });
+            std::vector<float> fl{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 2.0f, 1.0f, 0.0f, 2.0f, 0.0f, 0.0f, 2.0f,
+                                  1.0f, 1.0f, 2.0f, 2.0f, 0.0f, 2.0f, 0.0f, 1.0f, 0.0f, 2.0f, 0.0f, 2.0f};
+            //std::transform(
+            //    data, data + 6 * 4, std::back_inserter(fl), [](double val) { return static_cast<float>(val); });
 
             size_t size = fl.size() * sizeof(float);
 
@@ -444,7 +453,8 @@ struct device::impl : public std::enable_shared_from_this<impl>
         CASPAR_VERIFY(width > 0 && height > 0);
 
         auto depth_pool_index = depth == common::bit_depth::bit8 ? 0 : 1;
-        auto format = depth == common::bit_depth::bit8 ? vk::Format::eR8G8B8A8Unorm : vk::Format::eR16G16B16A16Unorm;
+        auto format = vk::Format::eB8G8R8A8Unorm; // depth == common::bit_depth::bit8 ? vk::Format::eR8G8B8A8Unorm :
+                                                 // vk::Format::eR16G16B16A16Unorm;
 
         // TODO (perf) Shared pool.
         auto pool   = &attachment_pools_[depth_pool_index][(width << 16 & 0xFFFF0000) | (height & 0x0000FFFF)];
@@ -485,6 +495,20 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
             tex = std::make_shared<texture>(width, height, 4, depth, image, imageMemory, imageView, _device);
         }
+
+        submitSingleTimeCommands(_device, _command_pool, _queue, [&](vk::CommandBuffer cmd) {
+            transitionImageLayout(tex->id(),
+                                    format,
+                                    vk::ImageLayout::eUndefined,
+                                    vk::AccessFlagBits2::eNone,
+                                    vk::PipelineStageFlagBits2::eTopOfPipe,
+
+                                    vk::ImageLayout::eColorAttachmentOptimal,
+                                    vk::AccessFlagBits2::eColorAttachmentWrite,
+                                    vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                                    cmd);
+        });
+
         tex->set_depth(depth);
 
         auto ptr = tex.get();
@@ -656,6 +680,8 @@ struct device::impl : public std::enable_shared_from_this<impl>
     {
         return spawn_async([=](yield_context yield) {
             auto buf = create_buffer(source->size(), false);
+            _device.waitIdle();
+
             source->copy_to(*buf);
 
             vk::CopyImageToBufferInfo2 copyInfo{};
@@ -671,7 +697,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
                 vk::Extent3D{static_cast<uint32_t>(source->width()), static_cast<uint32_t>(source->height()), 1};
             copyInfo.setRegions(region);
 
-            auto fence = _device.createFence(vk::FenceCreateInfo());
+           // auto fence = _device.createFence(vk::FenceCreateInfo());
 
             submitSingleTimeCommands(
                 _device,
@@ -680,31 +706,31 @@ struct device::impl : public std::enable_shared_from_this<impl>
                 [&](vk::CommandBuffer cmd) {
                     transitionImageLayout(source->id(),
                                           vk::Format::eR8G8B8A8Unorm,
-                                          vk::ImageLayout::eUndefined,
-                                          vk::AccessFlagBits2::eNone,
-                                          vk::PipelineStageFlagBits2::eTopOfPipe,
+                                          vk::ImageLayout::eColorAttachmentOptimal,
+                                          vk::AccessFlagBits2::eColorAttachmentWrite,
+                                          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
 
                                           vk::ImageLayout::eTransferSrcOptimal,
                                           vk::AccessFlagBits2::eHostRead,
                                           vk::PipelineStageFlagBits2::eHost,
                                           cmd);
                     cmd.copyImageToBuffer2(copyInfo);
-                },
-                &fence);
+                });
 
-            deadline_timer timer(io_context_);
-            for (auto n = 0; true; ++n) {
-                // TODO (perf) Smarter non-polling solution?
-                timer.expires_from_now(boost::posix_time::milliseconds(2));
-                timer.async_wait(yield);
+            //deadline_timer timer(io_context_);
+            //for (auto n = 0; true; ++n) {
+            //    // TODO (perf) Smarter non-polling solution?
+            //    timer.expires_from_now(boost::posix_time::milliseconds(2));
+            //    timer.async_wait(yield);
 
-                auto wait = _device.waitForFences(fence, VK_TRUE, 0);
-                if (wait == vk::Result::eSuccess) {
-                    break;
-                }
-            }
+            //    auto wait = _device.waitForFences(fence, VK_TRUE, 0);
+            //    if (wait == vk::Result::eSuccess) {
+            //        break;
+            //    }
+            //}
 
-            _device.destroyFence(fence);
+            //_device.destroyFence(fence);
+            // _device.flushMappedMemoryRanges(vk::MappedMemoryRange(buf->id(), 0, VK_WHOLE_SIZE));
 
             auto ptr  = reinterpret_cast<uint8_t*>(buf->data());
             auto size = buf->size();
