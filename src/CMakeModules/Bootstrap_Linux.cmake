@@ -40,6 +40,24 @@ find_package(SFML 3 COMPONENTS Graphics System Window QUIET)
 if(NOT SFML_FOUND)
     find_package(SFML 2 COMPONENTS graphics system window REQUIRED)
 endif()
+
+find_package(Vulkan REQUIRED)
+
+FetchContent_Declare(
+    fetch_vk_bootstrap
+    GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap
+    GIT_TAG        v1.4.328 #suggest using a tag so the library doesn't update whenever new commits are pushed to a branch
+    )
+FetchContent_MakeAvailable(fetch_vk_bootstrap)
+
+FetchContent_Declare(
+    fetch_vma
+    GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+    GIT_TAG        v3.3.0 #suggest using a tag so the library doesn't update whenever new commits are pushed to a branch
+)
+FetchContent_MakeAvailable(fetch_vma)
+
+
 find_package(X11 REQUIRED)
 
 if (ENABLE_HTML)
@@ -139,7 +157,7 @@ ENDIF ()
 
 ADD_COMPILE_OPTIONS (-fnon-call-exceptions) # Allow signal handler to throw exception
 
-ADD_COMPILE_OPTIONS (-Wno-deprecated-declarations -Wno-write-strings -Wno-multichar -Wno-cpp -Werror)
+ADD_COMPILE_OPTIONS (-Wno-deprecated-declarations -Wno-write-strings -Wno-multichar -Wno-cpp -Werror -Wno-nonnull -Wno-nullability-completeness)
 IF (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     ADD_COMPILE_OPTIONS (-Wno-terminate)
 ELSEIF (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -149,3 +167,5 @@ ELSEIF (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(STATUS "ADDING: -DTBB_USE_GLIBCXX_VERSION=${TBB_USE_GLIBCXX_VERSION}")
     add_definitions(-DTBB_USE_GLIBCXX_VERSION=${TBB_USE_GLIBCXX_VERSION})
 ENDIF ()
+
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -D_DEBUG")
