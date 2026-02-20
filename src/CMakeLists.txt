@@ -48,6 +48,14 @@ configure_file("${PROJECT_SOURCE_DIR}/version.tmpl" "${CMAKE_BINARY_DIR}/generat
 
 if(MSVC)
     include(Bootstrap_Windows)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    include(Bootstrap_macOS)
+
+    # Output build settings
+    message(STATUS "Target architecture: ${CMAKE_SYSTEM_PROCESSOR}")
+    message(STATUS "CPU Count: ${CONFIG_CPU_COUNT}")
+    message(STATUS "Target build type: ${CMAKE_BUILD_TYPE}")
+    message(STATUS "Build Version: ${CONFIG_VERSION_MAJOR}.${CONFIG_VERSION_MINOR}.${CONFIG_VERSION_BUG} ${CONFIG_VERSION_TAG} (Revision: ${CONFIG_VERSION_GIT_HASH})")
 else ()
     include(Bootstrap_Linux)
 

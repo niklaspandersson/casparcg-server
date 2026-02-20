@@ -7,7 +7,6 @@ set(SOURCES
 		consumer/output.cpp
 
 		diagnostics/call_context.cpp
-		diagnostics/osd_graph.cpp
 
 		frame/draw_frame.cpp
 		frame/frame.cpp
@@ -78,10 +77,22 @@ set(HEADERS
 		consumer/channel_info.h
 )
 
+# Platform-specific sources
+if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+	list(APPEND SOURCES diagnostics/osd_graph_stub.cpp)
+else()
+	list(APPEND SOURCES diagnostics/osd_graph.cpp)
+endif()
+
 casparcg_add_library(core SOURCES ${SOURCES} ${HEADERS})
 target_include_directories(core PRIVATE ..)
 target_precompile_headers(core PRIVATE StdAfx.h)
-target_link_libraries(core PRIVATE common GLEW::glew sfml-graphics)
+
+if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+	target_link_libraries(core PRIVATE common)
+else()
+	target_link_libraries(core PRIVATE common GLEW::glew sfml-graphics)
+endif()
 
 source_group(sources ./*)
 source_group(sources\\consumer consumer/*)

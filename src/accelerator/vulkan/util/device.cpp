@@ -129,6 +129,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
     vk::Device                         _device;
     vk::Queue                          _queue;
     vk::CommandPool                    _command_pool;
+    uint32_t                           _graphics_queue_family = 0;
     VmaAllocator                       _allocator;
 
     std::array<std::shared_ptr<pipeline>, 2> _pipelines;
@@ -164,7 +165,15 @@ struct device::impl : public std::enable_shared_from_this<impl>
                                     .set_app_name("CasparCG")
                                     .set_headless(true)
                                     .set_engine_name("CasparCG")
+#ifdef __APPLE__
+                                    .enable_extension(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)
+                                    .enable_extension(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)
+#endif
                                     .require_api_version(VK_API_VERSION_1_3);
+#ifdef __APPLE__
+        // MoltenVK requires the portability enumeration flag
+        instance_builder.enable_extension(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
         auto instance_ret = instance_builder.build();
         if (!instance_ret) {
             CASPAR_THROW_EXCEPTION(caspar_exception()
@@ -198,6 +207,9 @@ struct device::impl : public std::enable_shared_from_this<impl>
                            .add_required_extension(VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME)
                            .add_required_extension_features(localReadFeatures)
                            .prefer_gpu_device_type(vkb::PreferredDeviceType::discrete)
+#ifdef __APPLE__
+                           .add_required_extension("VK_KHR_portability_subset")
+#endif
                            .select();
         if (!gpu_res) {
             CASPAR_THROW_EXCEPTION(caspar_exception()
@@ -225,6 +237,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
         VULKAN_HPP_DEFAULT_DISPATCHER.init(_device);
         _queue            = vk::Queue(vkb_device.get_queue(vkb::QueueType::graphics).value());
         auto queue_family = vkb_device.get_queue_index(vkb::QueueType::graphics).value();
+        _graphics_queue_family = queue_family;
 
         vk::CommandPoolCreateInfo pool_info;
         pool_info.flags            = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
@@ -780,7 +793,13 @@ std::vector<vk::CommandBuffer>     device::allocateCommandBuffers(uint32_t count
     return impl_->allocateCommandBuffers(count);
 }
 void       device::submit(const vk::SubmitInfo& submitInfo, vk::Fence fence) { impl_->submit(submitInfo, fence); }
-vk::Device device::getVkDevice() const { return impl_->_device; }
+vk::Device         device::getVkDevice() const { return impl_->_device; }
+VkInstance         device::getInstance() const { return impl_->_vkb_instance.instance; }
+vk::PhysicalDevice device::getPhysicalDevice() const { return impl_->_physical_device; }
+uint32_t           device::getGraphicsQueueFamily() const
+{
+    return impl_->_graphics_queue_family;
+}
 std::shared_ptr<pipeline> device::get_pipeline(common::bit_depth depth)
 {
     return impl_->_pipelines[depth == common::bit_depth::bit8 ? 0 : 1];
