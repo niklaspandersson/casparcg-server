@@ -93,8 +93,9 @@ brew install boost ffmpeg tbb simde
 
 ### macOS Build Notes
 - Uses Vulkan backend (via MoltenVK) instead of OpenGL
-- Screen consumer uses GLFW + Vulkan (Phase 9 complete)
-- CEF/HTML module disabled (Phase 14)
+- Screen consumer uses GLFW + Vulkan with local vk_util classes
+- Vulkan accelerator uses Niklas's cross-platform `src/accelerator/vulkan/` implementation
+- CEF/HTML module disabled on macOS
 - OSD diagnostics disabled (uses stub)
 
 ## Vulkan-First Development Policy

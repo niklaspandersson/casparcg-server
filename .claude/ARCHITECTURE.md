@@ -26,7 +26,7 @@ AMCP (TCP:5250) → Video Channel → Stage (layers) → Mixer → Output → Co
 
 ```
 src/
-├── accelerator/     # GPU rendering (vk/ for Vulkan, ogl/ for OpenGL)
+├── accelerator/     # GPU rendering (vulkan/ for Vulkan, ogl/ for OpenGL)
 ├── common/          # Shared utilities, logging, threading
 ├── core/            # Business logic (channel, stage, mixer, frame, consumer, producer)
 ├── modules/         # Pluggable producers/consumers
@@ -105,8 +105,8 @@ ADD 1 SCREEN             # Add screen consumer
 | Platform | GPU Backend | Screen Consumer | Build |
 |----------|-------------|-----------------|-------|
 | macOS | Vulkan (MoltenVK) | GLFW + Vulkan | tools/macos/build.sh |
-| Windows | OpenGL 4.5 | SFML + OpenGL | CMake + MSVC |
-| Linux | OpenGL 4.5 (Vulkan planned) | SFML + OpenGL | CMake + Clang/GCC |
+| Windows | Vulkan / OpenGL 4.5 | SFML + OpenGL | CMake + MSVC |
+| Linux | Vulkan / OpenGL 4.5 | SFML + OpenGL | CMake + Clang/GCC |
 
 ## Threading Model
 
@@ -120,5 +120,5 @@ ADD 1 SCREEN             # Add screen consumer
 1. **Adding a producer**: Implement `frame_producer`, register in module's `init()`
 2. **Adding a consumer**: Implement `frame_consumer`, register in module's `init()`
 3. **Adding AMCP command**: Add to `amcp_command_repository` in protocol/amcp/
-4. **GPU rendering changes**: Edit `accelerator/vk/` (macOS) or `accelerator/ogl/` (Win/Linux)
+4. **GPU rendering changes**: Edit `accelerator/vulkan/` (all platforms) or `accelerator/ogl/` (Win/Linux legacy)
 5. **Frame transforms**: Modify `core/frame/frame_transform.h` and mixer implementations
