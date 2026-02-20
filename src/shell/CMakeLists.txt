@@ -113,6 +113,23 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 			COMMAND ${CMAKE_COMMAND} -E copy_directory "${CEF_FRAMEWORK_PATH}" "${CEF_OUTPUT_DIR}/Chromium Embedded Framework.framework"
 			COMMENT "Copying CEF framework to Frameworks directory"
 		)
+		# CEF uses dlopen to load GL libraries from the executable directory.
+		# Create symlinks from the executable dir to the framework's Libraries.
+		add_custom_command(TARGET casparcg POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E create_symlink
+				"${CEF_OUTPUT_DIR}/Chromium Embedded Framework.framework/Libraries/libEGL.dylib"
+				"${CMAKE_CURRENT_BINARY_DIR}/libEGL.dylib"
+			COMMAND ${CMAKE_COMMAND} -E create_symlink
+				"${CEF_OUTPUT_DIR}/Chromium Embedded Framework.framework/Libraries/libGLESv2.dylib"
+				"${CMAKE_CURRENT_BINARY_DIR}/libGLESv2.dylib"
+			COMMAND ${CMAKE_COMMAND} -E create_symlink
+				"${CEF_OUTPUT_DIR}/Chromium Embedded Framework.framework/Libraries/libvk_swiftshader.dylib"
+				"${CMAKE_CURRENT_BINARY_DIR}/libvk_swiftshader.dylib"
+			COMMAND ${CMAKE_COMMAND} -E create_symlink
+				"${CEF_OUTPUT_DIR}/Chromium Embedded Framework.framework/Libraries/vk_swiftshader_icd.json"
+				"${CMAKE_CURRENT_BINARY_DIR}/vk_swiftshader_icd.json"
+			COMMENT "Creating symlinks for CEF libraries in executable directory"
+		)
 	endif()
 else ()
 	target_link_libraries(casparcg
