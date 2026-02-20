@@ -152,7 +152,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
     {
         CASPAR_LOG(info) << L"Initializing Vulkan Device.";
 
-        auto instance_builder = vkb::InstanceBuilder()
+        auto instance_builder = vkb::InstanceBuilder(vkGetInstanceProcAddr)
 #ifdef _DEBUG
                                     .enable_validation_layers(true)
                                     .set_debug_messenger_severity(VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
@@ -165,15 +165,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
                                     .set_app_name("CasparCG")
                                     .set_headless(true)
                                     .set_engine_name("CasparCG")
-#ifdef __APPLE__
-                                    .enable_extension(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)
-                                    .enable_extension(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)
-#endif
-                                    .require_api_version(VK_API_VERSION_1_3);
-#ifdef __APPLE__
-        // MoltenVK requires the portability enumeration flag
-        instance_builder.enable_extension(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-#endif
+                                    .require_api_version(VK_API_VERSION_1_4);
         auto instance_ret = instance_builder.build();
         if (!instance_ret) {
             CASPAR_THROW_EXCEPTION(caspar_exception()

@@ -132,11 +132,11 @@ class AMCPClient:
 
     def play_color(self, channel: int, layer: int, color: str) -> Tuple[int, str]:
         """Play a solid color on specified channel/layer."""
-        return self.send(f"PLAY {channel}-{layer} COLOR {color}")
+        return self.send(f"PLAY {channel}-{layer} {color}")
 
     def loadbg_color(self, channel: int, layer: int, color: str) -> Tuple[int, str]:
         """Load a color to background."""
-        return self.send(f"LOADBG {channel}-{layer} COLOR {color}")
+        return self.send(f"LOADBG {channel}-{layer} {color}")
 
     def play(self, channel: int, layer: int, producer: str = "") -> Tuple[int, str]:
         """Play content on channel/layer."""

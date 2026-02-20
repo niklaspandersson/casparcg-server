@@ -1489,7 +1489,7 @@ class TestRunner:
                 duration = 0
 
             # LOADBG with transition
-            loadbg_cmd = f"COLOR GREEN {transition} {duration}"
+            loadbg_cmd = f"GREEN {transition} {duration}"
             r2 = self.client.loadbg(ch, 1, loadbg_cmd)
             if not self.helper.assert_success(r2, f"LOADBG with {transition} transition"):
                 all_passed = False
@@ -1538,7 +1538,7 @@ class TestRunner:
                 duration = 5  # frames
 
                 # LOADBG with transition
-                loadbg_cmd = f"COLOR GREEN {transition} {duration}"
+                loadbg_cmd = f"GREEN {transition} {duration}"
                 r2 = self.client.loadbg(ch, 1, loadbg_cmd)
                 if r2[0] < 200 or r2[0] >= 300:
                     print(f"    {transition}: Failed to LOADBG (code {r2[0]})")
@@ -1614,7 +1614,7 @@ class TestRunner:
         for sting in sting_names:
             try:
                 # Try to load with sting producer
-                result = self.client.loadbg(ch, 1, f"COLOR GREEN [STING] {sting}")
+                result = self.client.loadbg(ch, 1, f"GREEN [STING] {sting}")
                 code, msg = result
                 if code >= 200 and code < 300:
                     sting_found = True
@@ -1649,7 +1649,7 @@ class TestRunner:
 
             # Test with a non-existent sting file
             try:
-                result = self.client.loadbg(ch, 1, "COLOR BLUE [STING] nonexistent_sting_12345")
+                result = self.client.loadbg(ch, 1, "BLUE [STING] nonexistent_sting_12345")
                 code, msg = result
 
                 if code == 404:
@@ -3231,8 +3231,8 @@ class TestRunner:
             # Playback commands
             ("PLAY COLOR", lambda: self.client.play_color(ch, 1, "RED")),
             ("STOP", lambda: self.client.stop(ch, 1)),
-            ("LOADBG", lambda: self.client.loadbg(ch, 1, "COLOR GREEN")),
-            ("LOAD", lambda: self.client.load(ch, 1, "COLOR BLUE")),
+            ("LOADBG", lambda: self.client.loadbg(ch, 1, "GREEN")),
+            ("LOAD", lambda: self.client.load(ch, 1, "BLUE")),
 
             # Mixer commands
             ("MIXER OPACITY", lambda: self.client.mixer_opacity(ch, 1, 0.8)),

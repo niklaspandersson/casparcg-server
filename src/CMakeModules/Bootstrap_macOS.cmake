@@ -12,7 +12,7 @@ if(POLICY CMP0167)
 endif()
 
 # macOS-specific cache options
-set(ENABLE_HTML ON CACHE BOOL "Enable CEF and HTML producer")
+set(ENABLE_HTML OFF CACHE BOOL "Enable CEF and HTML producer")
 set(USE_STATIC_BOOST OFF CACHE BOOL "Use shared library version of Boost")
 set(CASPARCG_BINARY_NAME "casparcg" CACHE STRING "Custom name of the binary to build")
 set(ENABLE_AVX2 ON CACHE BOOL "Enable the AVX2 instruction set (requires a CPU that supports it)")
@@ -84,6 +84,11 @@ if (NOT TARGET Vulkan::Vulkan)
     target_include_directories(Vulkan::Vulkan INTERFACE ${Vulkan_INCLUDE_DIRS})
     target_link_libraries(Vulkan::Vulkan INTERFACE ${Vulkan_LIBRARY})
 endif()
+
+# Add Vulkan loader library path to rpath so vk-bootstrap's dlopen can find it
+get_filename_component(VULKAN_LOADER_DIR "${Vulkan_LIBRARY}" DIRECTORY)
+list(APPEND CMAKE_BUILD_RPATH "${VULKAN_LOADER_DIR}")
+list(APPEND CMAKE_INSTALL_RPATH "${VULKAN_LOADER_DIR}")
 
 # ============================================================================
 # vk-bootstrap and VulkanMemoryAllocator (matching Linux/Windows versions)
