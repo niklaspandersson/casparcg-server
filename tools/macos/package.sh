@@ -199,6 +199,13 @@ mkdir -p "$RESOURCES/log"
 echo "Copying executable..."
 cp "$BUILD_DIR/shell/casparcg" "$MACOS/"
 
+# Copy Vulkan screen shaders
+if [ -d "$BUILD_DIR/shell/shaders" ]; then
+    echo "Copying screen shaders..."
+    mkdir -p "$RESOURCES/shaders"
+    cp "$BUILD_DIR/shell/shaders/"*.spv "$RESOURCES/shaders/"
+fi
+
 # Copy CEF framework
 echo "Copying CEF framework..."
 cp -R "$BUILD_DIR/Frameworks/Chromium Embedded Framework.framework" "$FRAMEWORKS/"
@@ -589,6 +596,12 @@ fi
 # Copy bundled templates to working dir if template dir is empty
 if [ -z "$(ls -A "$WORK_DIR/template" 2>/dev/null)" ] && [ -d "$RESOURCES_DIR/template" ]; then
     cp -R "$RESOURCES_DIR/template/"* "$WORK_DIR/template/" 2>/dev/null || true
+fi
+
+# Always update shaders from bundle (they should match the binary)
+if [ -d "$RESOURCES_DIR/shaders" ]; then
+    mkdir -p "$WORK_DIR/shaders"
+    cp -R "$RESOURCES_DIR/shaders/"* "$WORK_DIR/shaders/" 2>/dev/null || true
 fi
 
 # Change to writable working directory
