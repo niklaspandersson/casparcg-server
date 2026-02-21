@@ -39,9 +39,9 @@ class TestConfig:
     frame_count_tolerance: int = 5
 
     # FFmpeg consumer settings
-    # Note: -an disables audio to avoid AAC codec issues during analysis
-    # Use -codec:v (not -c:v) as CasparCG's ffmpeg_consumer parses options differently
-    ffmpeg_args: str = "-an -codec:v libx264 -preset:v ultrafast -crf:v 18 -pix_fmt:v yuv420p"
+    # Note: -an must be at the END because CasparCG's option parser treats
+    # flags without values as key=next_arg pairs if placed before other options
+    ffmpeg_args: str = "-codec:v libx264 -preset:v ultrafast -crf:v 18 -pix_fmt:v yuv420p -an"
 
     # Timeouts
     startup_wait: float = 1.0  # Wait after starting playback

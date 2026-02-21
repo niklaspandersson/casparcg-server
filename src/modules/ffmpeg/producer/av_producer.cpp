@@ -36,6 +36,7 @@ extern "C" {
 #include <libavutil/channel_layout.h>
 #include <libavutil/error.h>
 #include <libavutil/opt.h>
+#include <libavutil/pixdesc.h>
 #include <libavutil/pixfmt.h>
 #include <libavutil/samplefmt.h>
 }
@@ -564,8 +565,13 @@ struct Filter
                                               AV_PIX_FMT_YUV420P12,
                                               AV_PIX_FMT_YUV410P,
                                               AV_PIX_FMT_YUVA444P,
+                                              AV_PIX_FMT_YUVA444P10,
+                                              AV_PIX_FMT_YUVA444P12,
                                               AV_PIX_FMT_YUVA422P,
+                                              AV_PIX_FMT_YUVA422P10,
+                                              AV_PIX_FMT_YUVA422P12,
                                               AV_PIX_FMT_YUVA420P,
+                                              AV_PIX_FMT_YUVA420P10,
                                               AV_PIX_FMT_UYVY422,
                                               // bwdif needs planar rgb
                                               AV_PIX_FMT_GBRP,
@@ -949,8 +955,14 @@ struct AVProducer::Impl
                 frame.duration   = av_rescale_q(frame.audio->nb_samples, {1, sr}, TIME_BASE_Q);
             }
 
+            // Detect if video has straight alpha (ProRes 4444, DNxHR, etc.)
+            bool is_straight_alpha = false;
+            if (frame.video) {
+                is_straight_alpha = has_straight_alpha(static_cast<AVPixelFormat>(frame.video->format));
+            }
+
             frame.frame = core::draw_frame(
-                make_frame(this, *frame_factory_, frame.video, frame.audio, get_color_space(frame.video), scale_mode_));
+                make_frame(this, *frame_factory_, frame.video, frame.audio, get_color_space(frame.video), scale_mode_, is_straight_alpha));
             frame.frame_count = frame_count_++;
 
             graph_->set_value("decode-time", decode_timer.elapsed() * format_desc_.fps * 0.5);

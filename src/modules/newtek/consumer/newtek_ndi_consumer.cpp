@@ -77,6 +77,7 @@ struct newtek_ndi_consumer : public core::frame_consumer
     std::condition_variable              buffer_cond_;
     std::condition_variable              worker_cond_;
     bool                                 ready_for_frame_;
+    std::atomic<bool>                    shutdown_{false};
     std::queue<core::const_frame>        buffer_;
     boost::thread                        send_thread;
     executor                             executor_;
@@ -113,6 +114,8 @@ struct newtek_ndi_consumer : public core::frame_consumer
     ~newtek_ndi_consumer()
     {
         if (send_thread.joinable()) {
+            shutdown_ = true;
+            worker_cond_.notify_all();  // Wake up the send thread so it can exit
             send_thread.interrupt();
             send_thread.join();
         }
@@ -216,10 +219,12 @@ struct newtek_ndi_consumer : public core::frame_consumer
                 auto buffer_size = buffer_.size();
                 // Buffer a few frames to keep NDI going when caspar is slow on a few frames
                 // This can be removed when CasparCG doesn't periodally slows down on frames
-                while (!send_thread.interruption_requested()) {
+                while (!send_thread.interruption_requested() && !shutdown_) {
                     {
                         std::unique_lock<std::mutex> lock(buffer_mutex_);
-                        worker_cond_.wait(lock, [&] { return buffer_.size() > buffer_size; });
+                        worker_cond_.wait(lock, [&] { return buffer_.size() > buffer_size || shutdown_.load(); });
+                        if (shutdown_)
+                            break;
                         graph_->set_value("buffered-frames", static_cast<double>(buffer_.size() + 0.001) / 8);
                         buffer_size = buffer_.size();
                         if (buffer_.size() >= 8) {
@@ -232,11 +237,13 @@ struct newtek_ndi_consumer : public core::frame_consumer
                 auto frametimeUs = static_cast<int>(1000000 / format_desc_.fps);
                 auto time_point  = std::chrono::steady_clock::now();
                 time_point += std::chrono::microseconds(frametimeUs);
-                while (!send_thread.interruption_requested()) {
+                while (!send_thread.interruption_requested() && !shutdown_) {
                     core::const_frame frame;
                     {
                         std::unique_lock<std::mutex> lock(buffer_mutex_);
-                        worker_cond_.wait(lock, [&] { return !buffer_.empty(); });
+                        worker_cond_.wait(lock, [&] { return !buffer_.empty() || shutdown_.load(); });
+                        if (shutdown_ && buffer_.empty())
+                            break;
                         graph_->set_value("buffered-frames", static_cast<double>(buffer_.size() + 0.001) / 8);
                         frame = std::move(buffer_.front());
                         buffer_.pop();

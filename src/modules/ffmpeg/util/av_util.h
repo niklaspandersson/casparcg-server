@@ -27,6 +27,8 @@ std::shared_ptr<AVPacket> alloc_packet();
 
 core::color_space get_color_space(const std::shared_ptr<AVFrame>& video);
 
+bool has_straight_alpha(AVPixelFormat pix_fmt);
+
 core::pixel_format_desc pixel_format_desc(AVPixelFormat     pix_fmt,
                                           int               width,
                                           int               height,
