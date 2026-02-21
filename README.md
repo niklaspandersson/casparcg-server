@@ -5,14 +5,14 @@ Thank you for your interest in CasparCG Server, a professional software used to
 play out and record professional graphics, audio and video to multiple outputs.
 CasparCG Server has been in 24/7 broadcast production since 2006.
 
-The CasparCG Server works on Windows and Linux.
+The CasparCG Server works on Windows, Linux and macOS.
 
 System Requirements
 -------------------
 
-- A graphics card (GPU) capable of OpenGL 4.5 is required.
-- An Nvidia GPU is recommended, but other GPU's will likely work fine.
-- Intel and AMD CPU's have been tested and are known to work
+- A graphics card (GPU) capable of OpenGL 4.5 (Windows/Linux) or Metal (macOS) is required.
+- An Nvidia GPU is recommended on Windows/Linux, but other GPU's will likely work fine.
+- Intel and AMD CPU's have been tested and are known to work.
 - PCIE bandwidth is important between your GPU and CPU, as well as Decklink and CPU. Avoid chipset lanes when possible.
 
 ### Windows
@@ -24,6 +24,12 @@ System Requirements
 
  - Ubuntu 24.04 is recommended
  - Other distributions and releases will work but you will need to compile it yourself and have not been tested
+
+### macOS
+
+ - macOS 10.15 (Catalina) or later is required
+ - Apple Silicon (M1/M2/M3+) is required
+ - Uses Vulkan via MoltenVK (Metal backend) instead of OpenGL
 
 Getting Started
 ---------------
@@ -49,6 +55,7 @@ Getting Started
 4.
    1. Windows: start `casparcg_auto_restart.bat`, or `casparcg.exe` and `scanner.exe` separately.
    1. Linux: start the `run.sh` program or use tools/linux/start_docker.sh to run within docker (documentation is at the top of the file).
+   1. macOS: open `CasparCG.app` from Finder, or run `CasparCG.app/Contents/MacOS/casparcg-launcher` from a terminal.
 
 5. Connect to the Server from a client software, such as the "CasparCG Client"
    which is available as a separate download.
