@@ -283,19 +283,30 @@ if [ -d "$BUILD_DIR/shell/data" ]; then
     rsync -a --exclude='cef_cache' --exclude='*.log' "$BUILD_DIR/shell/data/" "$RESOURCES/data/" 2>/dev/null || true
 fi
 
-# Copy media files to Resources only (MacOS dir uses symlinks to avoid signing issues)
-if [ -d "$BUILD_DIR/shell/media" ]; then
+# Copy media files to Resources
+# First try build dir, then fall back to tests/testmedia/
+if [ -d "$BUILD_DIR/shell/media" ] && [ -n "$(ls -A "$BUILD_DIR/shell/media" 2>/dev/null)" ]; then
+    echo "Copying media from build directory..."
     cp -R "$BUILD_DIR/shell/media/"* "$RESOURCES/media/" 2>/dev/null || true
+elif [ -d "$ROOT_DIR/tests/testmedia" ]; then
+    echo "Copying test media files..."
+    cp -R "$ROOT_DIR/tests/testmedia/"* "$RESOURCES/media/" 2>/dev/null || true
 fi
 
-# Copy template files to Resources only
-if [ -d "$BUILD_DIR/shell/template" ]; then
+# Copy template files to Resources
+if [ -d "$BUILD_DIR/shell/template" ] && [ -n "$(ls -A "$BUILD_DIR/shell/template" 2>/dev/null)" ]; then
     cp -R "$BUILD_DIR/shell/template/"* "$RESOURCES/template/" 2>/dev/null || true
 fi
 
 # Note: No symlinks created in MacOS directory.
 # The launcher script sets up a writable working directory at
 # ~/Library/Application Support/CasparCG/ with log/, data/, media/, template/
+
+# Copy app icon
+if [ -f "$ROOT_DIR/src/shell/CasparCG.icns" ]; then
+    echo "Copying app icon..."
+    cp "$ROOT_DIR/src/shell/CasparCG.icns" "$RESOURCES/"
+fi
 
 # Copy font for OSD (if it exists) - to Resources only
 if [ -f "$BUILD_DIR/shell/LiberationMono-Regular.ttf" ]; then
@@ -716,6 +727,8 @@ cat > "$CONTENTS/Info.plist" << EOF
     <string>$BUNDLE_ID</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
+    <key>CFBundleIconFile</key>
+    <string>CasparCG</string>
     <key>CFBundleName</key>
     <string>$APP_NAME</string>
     <key>CFBundleDisplayName</key>
@@ -930,13 +943,54 @@ if [ "$CREATE_DMG" = true ]; then
     cp -R "$APP_BUNDLE" "$DMG_STAGING/"
     ln -s /Applications "$DMG_STAGING/Applications"
 
-    # Create DMG
+    # Detach any previously mounted CasparCG volumes
+    hdiutil detach /Volumes/CasparCG -force 2>/dev/null || true
+
+    # Create read-write DMG first for styling
+    DMG_TEMP="$OUTPUT_DIR/$DMG_NAME-temp.dmg"
+    rm -f "$DMG_TEMP"
+    DMG_SIZE=$(du -sm "$DMG_STAGING" | awk '{print $1 + 20}')
     hdiutil create -volname "$APP_NAME" \
         -srcfolder "$DMG_STAGING" \
-        -ov -format UDZO \
-        "$DMG_PATH"
+        -ov -format UDRW \
+        -size "${DMG_SIZE}m" \
+        "$DMG_TEMP"
 
-    # Clean up staging
+    # Mount and style the DMG layout (app left, Applications right)
+    echo "  Styling DMG layout..."
+    MOUNT_DIR=$(hdiutil attach -readwrite -noverify "$DMG_TEMP" | grep "/Volumes/" | awk -F'\t' '{print $NF}')
+    if [ -n "$MOUNT_DIR" ]; then
+        osascript <<APPLESCRIPT
+        tell application "Finder"
+            tell disk "$APP_NAME"
+                open
+                set current view of container window to icon view
+                set toolbar visible of container window to false
+                set statusbar visible of container window to false
+                set bounds of container window to {100, 100, 640, 400}
+                set viewOptions to the icon view options of container window
+                set arrangement of viewOptions to not arranged
+                set icon size of viewOptions to 80
+                set background color of viewOptions to {65535, 65535, 65535}
+                set position of item "CasparCG.app" of container window to {130, 150}
+                set position of item "Applications" of container window to {410, 150}
+                close
+                open
+                update without registering applications
+                delay 2
+                close
+            end tell
+        end tell
+APPLESCRIPT
+        sync
+        hdiutil detach "$MOUNT_DIR" -quiet
+    fi
+
+    # Convert to compressed read-only DMG
+    hdiutil convert "$DMG_TEMP" -format UDZO -o "$DMG_PATH"
+
+    # Clean up
+    rm -f "$DMG_TEMP"
     rm -rf "$DMG_STAGING"
 
     # Sign DMG if signing is enabled
