@@ -943,54 +943,14 @@ if [ "$CREATE_DMG" = true ]; then
     cp -R "$APP_BUNDLE" "$DMG_STAGING/"
     ln -s /Applications "$DMG_STAGING/Applications"
 
-    # Detach any previously mounted CasparCG volumes
-    hdiutil detach /Volumes/CasparCG -force 2>/dev/null || true
-
-    # Create read-write DMG first for styling
-    DMG_TEMP="$OUTPUT_DIR/$DMG_NAME-temp.dmg"
-    rm -f "$DMG_TEMP"
-    DMG_SIZE=$(du -sm "$DMG_STAGING" | awk '{print $1 + 20}')
-    hdiutil create -volname "$APP_NAME" \
+    # Create DMG
+    # Note: volume name must differ from app name to avoid macOS Gatekeeper conflict
+    hdiutil create -volname "$APP_NAME Server" \
         -srcfolder "$DMG_STAGING" \
-        -ov -format UDRW \
-        -size "${DMG_SIZE}m" \
-        "$DMG_TEMP"
+        -ov -format UDZO \
+        "$DMG_PATH"
 
-    # Mount and style the DMG layout (app left, Applications right)
-    echo "  Styling DMG layout..."
-    MOUNT_DIR=$(hdiutil attach -readwrite -noverify "$DMG_TEMP" | grep "/Volumes/" | awk -F'\t' '{print $NF}')
-    if [ -n "$MOUNT_DIR" ]; then
-        osascript <<APPLESCRIPT
-        tell application "Finder"
-            tell disk "$APP_NAME"
-                open
-                set current view of container window to icon view
-                set toolbar visible of container window to false
-                set statusbar visible of container window to false
-                set bounds of container window to {100, 100, 640, 400}
-                set viewOptions to the icon view options of container window
-                set arrangement of viewOptions to not arranged
-                set icon size of viewOptions to 80
-                set background color of viewOptions to {65535, 65535, 65535}
-                set position of item "CasparCG.app" of container window to {130, 150}
-                set position of item "Applications" of container window to {410, 150}
-                close
-                open
-                update without registering applications
-                delay 2
-                close
-            end tell
-        end tell
-APPLESCRIPT
-        sync
-        hdiutil detach "$MOUNT_DIR" -quiet
-    fi
-
-    # Convert to compressed read-only DMG
-    hdiutil convert "$DMG_TEMP" -format UDZO -o "$DMG_PATH"
-
-    # Clean up
-    rm -f "$DMG_TEMP"
+    # Clean up staging
     rm -rf "$DMG_STAGING"
 
     # Sign DMG if signing is enabled
