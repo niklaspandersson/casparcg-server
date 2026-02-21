@@ -27,22 +27,23 @@ usage() {
     echo "  --with-html         Enable CEF/HTML module (default)"
     echo "  --no-html           Disable CEF/HTML module"
     echo ""
-    echo "Packaging options:"
-    echo "  --package           Create .app bundle after build (includes NDI by default)"
-    echo "  --no-ndi            Exclude NDI library from package"
-    echo "  --dmg               Create DMG disk image"
-    echo "  --sign              Sign the app bundle (requires --identity)"
-    echo "  --identity \"...\"    Code signing identity"
-    echo "  --notarize          Notarize the app (requires Apple credentials)"
-    echo "  --apple-id \"...\"    Apple ID for notarization"
-    echo "  --team-id \"...\"     Team ID for notarization"
-    echo "  --password \"...\"    App-specific password"
+    echo "Packaging options (--package enables all by default, use --no-* to disable):"
+    echo "  --package           Create .app bundle after build"
+    echo "  --no-ndi            Exclude NDI library"
+    echo "  --no-dmg            Skip DMG creation"
+    echo "  --no-sign           Skip code signing"
+    echo "  --no-notarize       Skip notarization"
+    echo "  --identity \"...\"    Override signing identity from .env"
+    echo "  --keychain-profile \"...\" Override keychain profile from .env"
+    echo ""
+    echo "Signing credentials are read from .env file (SIGNING_IDENTITY, NOTARIZE_KEYCHAIN_PROFILE)."
     echo ""
     echo "Examples:"
-    echo "  $0                              # Build only"
-    echo "  $0 --clean                      # Clean build"
-    echo "  $0 --package                    # Build and create app bundle with NDI"
-    echo "  $0 --package --no-ndi           # Build without NDI"
+    echo "  $0                                    # Build only"
+    echo "  $0 --clean                            # Clean build"
+    echo "  $0 --package                          # Build + signed, notarized DMG"
+    echo "  $0 --package --no-sign                # Build + unsigned app bundle + DMG"
+    echo "  $0 --package --no-dmg --no-sign       # Build + unsigned app bundle only"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -75,32 +76,24 @@ while [[ $# -gt 0 ]]; do
             PACKAGE_ARGS="$PACKAGE_ARGS --no-ndi"
             shift
             ;;
-        --dmg)
-            PACKAGE_ARGS="$PACKAGE_ARGS --dmg"
+        --no-dmg)
+            PACKAGE_ARGS="$PACKAGE_ARGS --no-dmg"
             shift
             ;;
-        --sign)
-            PACKAGE_ARGS="$PACKAGE_ARGS --sign"
+        --no-sign)
+            PACKAGE_ARGS="$PACKAGE_ARGS --no-sign"
+            shift
+            ;;
+        --no-notarize)
+            PACKAGE_ARGS="$PACKAGE_ARGS --no-notarize"
             shift
             ;;
         --identity)
             PACKAGE_ARGS="$PACKAGE_ARGS --identity \"$2\""
             shift 2
             ;;
-        --notarize)
-            PACKAGE_ARGS="$PACKAGE_ARGS --notarize"
-            shift
-            ;;
-        --apple-id)
-            PACKAGE_ARGS="$PACKAGE_ARGS --apple-id \"$2\""
-            shift 2
-            ;;
-        --team-id)
-            PACKAGE_ARGS="$PACKAGE_ARGS --team-id \"$2\""
-            shift 2
-            ;;
-        --password)
-            PACKAGE_ARGS="$PACKAGE_ARGS --password \"$2\""
+        --keychain-profile)
+            PACKAGE_ARGS="$PACKAGE_ARGS --keychain-profile \"$2\""
             shift 2
             ;;
         -h|--help)

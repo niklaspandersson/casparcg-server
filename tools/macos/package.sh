@@ -50,11 +50,13 @@ else
     GIT_HASH="unknown"
 fi
 
-# Options (use environment variables from .env as defaults)
+# Options - everything enabled by default
+# Use .env file for signing credentials (SIGNING_IDENTITY, NOTARIZE_KEYCHAIN_PROFILE)
+# Use --no-* flags to disable features
 INCLUDE_NDI=true
-CREATE_DMG=false
-SIGN_APP=false
-NOTARIZE=false
+CREATE_DMG=true
+SIGN_APP=true
+NOTARIZE=true
 OPT_SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 OPT_KEYCHAIN_PROFILE="${NOTARIZE_KEYCHAIN_PROFILE:-}"
 NDI_LIB_PATH=""
@@ -63,26 +65,32 @@ NDI_LIB_PATH=""
 usage() {
     echo "Usage: $0 [options]"
     echo ""
+    echo "By default, builds a signed, notarized DMG with NDI included."
+    echo "Signing credentials are read from .env file (SIGNING_IDENTITY, NOTARIZE_KEYCHAIN_PROFILE)."
+    echo ""
     echo "Options:"
-    echo "  --no-ndi                 Exclude NDI library (included by default)"
+    echo "  --no-ndi                 Exclude NDI library"
     echo "  --ndi-path [path]        Specify custom path to libndi.dylib"
-    echo "  --dmg                    Create DMG disk image"
-    echo "  --sign                   Sign the app bundle"
-    echo "  --identity \"...\"         Code signing identity (Developer ID Application: ...)"
-    echo "  --notarize               Notarize the app (requires --sign and keychain profile)"
-    echo "  --keychain-profile \"...\" Keychain profile for notarization (from notarytool store-credentials)"
+    echo "  --no-dmg                 Skip DMG creation (app bundle only)"
+    echo "  --no-sign                Skip code signing (ad-hoc sign only)"
+    echo "  --no-notarize            Skip notarization"
+    echo "  --identity \"...\"         Override signing identity from .env"
+    echo "  --keychain-profile \"...\" Override keychain profile from .env"
     echo "  -h, --help               Show this help"
+    echo ""
+    echo "Setup (.env file in project root):"
+    echo "  SIGNING_IDENTITY=\"Developer ID Application: Your Name (TEAMID)\""
+    echo "  NOTARIZE_KEYCHAIN_PROFILE=\"CasparCG-Notarize\""
     echo ""
     echo "Setup keychain profile (one-time):"
     echo "  xcrun notarytool store-credentials \"CasparCG-Notarize\" \\"
     echo "      --apple-id \"your@email.com\" --team-id \"TEAMID\" --password \"xxxx\""
     echo ""
     echo "Examples:"
-    echo "  $0                                   # Create app bundle with NDI"
-    echo "  $0 --no-ndi                         # Create app bundle without NDI"
-    echo "  $0 --dmg                            # Create DMG with NDI"
-    echo "  $0 --sign --identity \"Developer ID Application: My Name (TEAMID)\""
-    echo "  $0 --sign --notarize --dmg          # Uses .env for credentials"
+    echo "  $0                       # Full build: signed, notarized DMG with NDI"
+    echo "  $0 --no-sign             # Unsigned app bundle + DMG (no .env needed)"
+    echo "  $0 --no-notarize         # Signed but not notarized"
+    echo "  $0 --no-dmg --no-sign    # Quick: unsigned app bundle only"
 }
 
 # Parse arguments
@@ -96,21 +104,22 @@ while [[ $# -gt 0 ]]; do
             NDI_LIB_PATH="$2"
             shift 2
             ;;
-        --dmg)
-            CREATE_DMG=true
+        --no-dmg)
+            CREATE_DMG=false
             shift
             ;;
-        --sign)
-            SIGN_APP=true
+        --no-sign)
+            SIGN_APP=false
+            NOTARIZE=false
+            shift
+            ;;
+        --no-notarize)
+            NOTARIZE=false
             shift
             ;;
         --identity)
             OPT_SIGNING_IDENTITY="$2"
             shift 2
-            ;;
-        --notarize)
-            NOTARIZE=true
-            shift
             ;;
         --keychain-profile)
             OPT_KEYCHAIN_PROFILE="$2"
@@ -128,25 +137,22 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Validate options
+# Auto-disable signing/notarization if credentials are missing
 if [ "$SIGN_APP" = true ] && [ -z "$OPT_SIGNING_IDENTITY" ]; then
-    echo "Error: --sign requires --identity (or set SIGNING_IDENTITY in .env)"
-    exit 1
+    echo "Warning: No SIGNING_IDENTITY found in .env or --identity flag. Skipping code signing."
+    echo "  To enable, add SIGNING_IDENTITY to .env or pass --identity \"...\""
+    SIGN_APP=false
+    NOTARIZE=false
 fi
 
-if [ "$NOTARIZE" = true ]; then
-    if [ "$SIGN_APP" = false ]; then
-        echo "Error: --notarize requires --sign"
-        exit 1
-    fi
-    if [ -z "$OPT_KEYCHAIN_PROFILE" ]; then
-        echo "Error: --notarize requires keychain profile (set NOTARIZE_KEYCHAIN_PROFILE in .env or use --keychain-profile)"
-        echo ""
-        echo "Create a keychain profile with:"
-        echo "  xcrun notarytool store-credentials \"CasparCG-Notarize\" \\"
-        echo "      --apple-id \"your@email.com\" --team-id \"TEAMID\" --password \"xxxx\""
-        exit 1
-    fi
+if [ "$NOTARIZE" = true ] && [ -z "$OPT_KEYCHAIN_PROFILE" ]; then
+    echo "Warning: No NOTARIZE_KEYCHAIN_PROFILE found in .env or --keychain-profile flag. Skipping notarization."
+    echo "  To enable, add NOTARIZE_KEYCHAIN_PROFILE to .env or pass --keychain-profile \"...\""
+    echo ""
+    echo "  Setup keychain profile (one-time):"
+    echo "    xcrun notarytool store-credentials \"CasparCG-Notarize\" \\"
+    echo "        --apple-id \"your@email.com\" --team-id \"TEAMID\" --password \"xxxx\""
+    NOTARIZE=false
 fi
 
 # Check build exists
