@@ -2,18 +2,19 @@
 #
 # CasparCG macOS Packaging Script
 #
-# Creates a macOS .app bundle from the build output, with optional:
-#   - NDI library bundling
-#   - Code signing
-#   - DMG creation
-#   - Notarization
+# Creates a signed, notarized macOS .app bundle + DMG from the build output.
+# By default everything is enabled (NDI, signing, notarization, DMG).
+# Signing credentials are read from .env file in the project root.
 #
 # Usage:
-#   ./package.sh                              # Create unsigned app bundle
-#   ./package.sh --include-ndi                # Include NDI library
-#   ./package.sh --dmg                        # Create DMG
-#   ./package.sh --sign --identity "..."      # Sign the app
-#   ./package.sh --notarize --apple-id "..." --team-id "..." --password "..."
+#   ./package.sh                              # Full: signed, notarized DMG with NDI
+#   ./package.sh --no-sign                    # Unsigned app bundle + DMG
+#   ./package.sh --no-notarize                # Signed but not notarized
+#   ./package.sh --no-dmg --no-sign           # Quick: unsigned app bundle only
+#
+# Setup (.env file):
+#   SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+#   NOTARIZE_KEYCHAIN_PROFILE="CasparCG-Notarize"
 #
 
 set -e

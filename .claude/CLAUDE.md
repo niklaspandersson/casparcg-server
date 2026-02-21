@@ -79,10 +79,18 @@ CLEAR 1                     # Clear all layers
 
 **ALWAYS use the build script for macOS builds:**
 ```bash
-./tools/macos/build.sh           # Normal build
-./tools/macos/build.sh --clean   # Clean build from scratch
-./tools/macos/build.sh --verbose # Verbose output
-./tools/macos/build.sh --package # Build and create .app bundle
+./tools/macos/build.sh                          # Normal build
+./tools/macos/build.sh --clean                  # Clean build from scratch
+./tools/macos/build.sh --verbose                # Verbose output
+./tools/macos/build.sh --package                # Build + signed, notarized DMG (reads .env)
+./tools/macos/build.sh --package --no-sign      # Build + unsigned app bundle + DMG
+./tools/macos/build.sh --package --no-dmg --no-sign  # Build + unsigned app bundle only
+```
+
+Signing credentials are read from `.env` file in the project root:
+```
+SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+NOTARIZE_KEYCHAIN_PROFILE="CasparCG-Notarize"
 ```
 
 ### Required Dependencies (install via Homebrew)
