@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 3.16)
+cmake_minimum_required (VERSION 3.28)
 
 include(ExternalProject)
 include(FetchContent)
@@ -11,7 +11,7 @@ if(POLICY CMP0167)
     cmake_policy(SET CMP0167 NEW)
 endif()
 
-set(ENABLE_HTML OFF CACHE BOOL "Enable CEF and HTML producer")
+set(ENABLE_HTML ON CACHE BOOL "Enable CEF and HTML producer")
 set(USE_STATIC_BOOST OFF CACHE BOOL "Use shared library version of Boost")
 set(CASPARCG_BINARY_NAME "casparcg" CACHE STRING "Custom name of the binary to build (this disables some install files)")
 set(ENABLE_AVX2 OFF CACHE BOOL "Enable the AVX2 instruction set (requires a CPU that supports it)")
@@ -39,19 +39,19 @@ SET (CMAKE_PREFIX_PATH /opt/homebrew/opt/ffmpeg@7 ${CMAKE_PREFIX_PATH})
 find_package(FFmpeg REQUIRED)
 find_package(Vulkan REQUIRED)
 
-FetchContent_Declare(
-    fetch_vk_bootstrap
-    GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap
-    GIT_TAG        v1.4.328 #suggest using a tag so the library doesn't update whenever new commits are pushed to a branch
-    )
-FetchContent_MakeAvailable(fetch_vk_bootstrap)
-
-FetchContent_Declare(
-    fetch_vma
-    GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
-    GIT_TAG        v3.3.0 #suggest using a tag so the library doesn't update whenever new commits are pushed to a branch
+FetchContent_Declare(vk_bootstrap
+    URL ${CASPARCG_DOWNLOAD_MIRROR}/vk-bootstrap/vk-bootstrap-1.4.328.tar.gz
+    URL_HASH SHA256=3be0220de218dc3e692aeac552b2953860a0e0a48257f4a61c3f1c1472674744
+    DOWNLOAD_DIR ${CASPARCG_DOWNLOAD_CACHE}
 )
-FetchContent_MakeAvailable(fetch_vma)
+FetchContent_MakeAvailable(vk_bootstrap)
+
+FetchContent_Declare(vma
+    URL ${CASPARCG_DOWNLOAD_MIRROR}/VulkanMemoryAllocator/VulkanMemoryAllocator-3.3.0.tar.gz
+    URL_HASH SHA256=c4f6bbe6b5a45c2eb610ca9d231158e313086d5b1a40c9922cb42b597419b14e
+    DOWNLOAD_DIR ${CASPARCG_DOWNLOAD_CACHE}
+)
+FetchContent_MakeAvailable(vma)
 
 if (NOT TARGET OpenAL::OpenAL)
     add_library(OpenAL::OpenAL INTERFACE IMPORTED)
@@ -67,37 +67,38 @@ if (ENABLE_HTML)
         CMAKE_ARGS -DUSE_SANDBOX=Off ${EXTERNAL_CMAKE_ARGS}
         INSTALL_COMMAND ""
         BUILD_BYPRODUCTS
-            "<SOURCE_DIR>/Release/Chromium Embedded Framework.framework"
+            "<SOURCE_DIR>/Release/Chromium Embedded Framework.framework/Chromium Embedded Framework"
             "<BINARY_DIR>/libcef_dll_wrapper/libcef_dll_wrapper.a"
     )
+    
     ExternalProject_Get_Property(cef SOURCE_DIR)
     ExternalProject_Get_Property(cef BINARY_DIR)
 
+    set(CEF_ROOT "${SOURCE_DIR}" CACHE INTERNAL "CEF root directory")
+
+    # Create the CEF::CEF interface target directly (no find_package needed,
+    # since CEF is downloaded at build time via ExternalProject)
     add_library(CEF::CEF INTERFACE IMPORTED)
+    add_dependencies(CEF::CEF cef)
     target_include_directories(CEF::CEF INTERFACE
         "${SOURCE_DIR}"
     )
+
     target_link_libraries(CEF::CEF INTERFACE
         # Note: All of these must be referenced in the BUILD_BYPRODUCTS above, to satisfy ninja
-        "${SOURCE_DIR}/Release/Chromium Embedded Framework.framework"
+        "${SOURCE_DIR}/Release/Chromium Embedded Framework.framework/Chromium Embedded Framework"
         "${BINARY_DIR}/libcef_dll_wrapper/libcef_dll_wrapper.a"
+        -lpthread
+        "-framework AppKit"
+        "-framework Cocoa"
+        "-framework IOSurface"
     )
 
-    install(DIRECTORY ${SOURCE_DIR}/Resources/locales TYPE LIB)
-    install(FILES ${SOURCE_DIR}/Resources/chrome_100_percent.pak TYPE LIB)
-    install(FILES ${SOURCE_DIR}/Resources/chrome_200_percent.pak TYPE LIB)
-    install(FILES ${SOURCE_DIR}/Resources/icudtl.dat TYPE LIB)
-    install(FILES ${SOURCE_DIR}/Resources/resources.pak TYPE LIB)
-
-    install(FILES ${SOURCE_DIR}/Release/chrome-sandbox TYPE LIB)
-    install(FILES ${SOURCE_DIR}/Release/libcef.so TYPE LIB)
-    install(FILES ${SOURCE_DIR}/Release/libEGL.so TYPE LIB)
-    install(FILES ${SOURCE_DIR}/Release/libGLESv2.so TYPE LIB)
-    install(FILES ${SOURCE_DIR}/Release/libvk_swiftshader.so TYPE LIB)
-    install(FILES ${SOURCE_DIR}/Release/libvulkan.so.1 TYPE LIB)
-    install(FILES ${SOURCE_DIR}/Release/snapshot_blob.bin TYPE LIB)
-    install(FILES ${SOURCE_DIR}/Release/v8_context_snapshot.bin TYPE LIB)
-    install(FILES ${SOURCE_DIR}/Release/vk_swiftshader_icd.json TYPE LIB)
+    target_compile_definitions(CEF::CEF INTERFACE
+        __STDC_CONSTANT_MACROS
+        __STDC_FORMAT_MACROS
+    )
+    
 endif ()
 
 SET (BOOST_INCLUDE_PATH "${Boost_INCLUDE_DIRS}")
