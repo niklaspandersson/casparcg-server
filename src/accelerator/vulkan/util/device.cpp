@@ -131,9 +131,11 @@ struct device::impl : public std::enable_shared_from_this<impl>
     vk::PhysicalDevice                 _physical_device;
     vk::Device                         _device;
     vk::Queue                          _queue;
-    uint32_t                           _queue_family_index = 0;
+    uint32_t                           _queue_family_index        = 0;
+    int                                _decode_queue_family_index = -1;
     vk::CommandPool                    _command_pool;
     VmaAllocator                       _allocator;
+    std::vector<std::string>           _enabled_device_extensions;
 
     std::array<std::shared_ptr<pipeline>, 2> _pipelines;
 
@@ -154,7 +156,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
         CASPAR_LOG(info) << L"Initializing Vulkan Device.";
 
         auto instance_builder = vkb::InstanceBuilder()
-#ifdef _DEBUG
+                                    // #ifdef _DEBUG
                                     .enable_validation_layers(true)
                                     .set_debug_messenger_severity(VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
                                                                   VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
@@ -162,7 +164,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
                                                               VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                                                               VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT)
                                     .set_debug_callback(default_debug_callback)
-#endif
+                                    // #endif
                                     .set_app_name("CasparCG")
                                     .set_headless(true)
                                     .set_engine_name("CasparCG")
@@ -206,20 +208,61 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
         CASPAR_LOG(info) << "Selected Vulkan device: " << _vkb_physical_device.properties.deviceName;
 
+        // Enable FFmpeg hw decode extensions if supported by the device
+        _vkb_physical_device.enable_extension_if_present(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME);
+        _vkb_physical_device.enable_extension_if_present(VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME);
+        _vkb_physical_device.enable_extension_if_present(VK_KHR_VIDEO_DECODE_H264_EXTENSION_NAME);
+        _vkb_physical_device.enable_extension_if_present(VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME);
+        _vkb_physical_device.enable_extension_if_present(VK_KHR_VIDEO_DECODE_AV1_EXTENSION_NAME);
+        _vkb_physical_device.enable_extension_if_present(VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME);
+
         // Create the logical device
+        _physical_device = vk::PhysicalDevice(_vkb_physical_device.physical_device);
+
+        // Find a queue family that supports video decode before building the device
+        auto queue_families = _physical_device.getQueueFamilyProperties();
+        for (uint32_t i = 0; i < queue_families.size(); i++) {
+            if (queue_families[i].queueFlags & vk::QueueFlagBits::eVideoDecodeKHR) {
+                _decode_queue_family_index = static_cast<int>(i);
+                break;
+            }
+        }
+
         auto device_builder = vkb::DeviceBuilder(_vkb_physical_device);
-        _physical_device    = vk::PhysicalDevice(_vkb_physical_device.physical_device);
+
+        // Find the graphics queue family
+        uint32_t graphics_queue_family = 0;
+        for (uint32_t i = 0; i < queue_families.size(); i++) {
+            if (queue_families[i].queueFlags & vk::QueueFlagBits::eGraphics) {
+                graphics_queue_family = i;
+                break;
+            }
+        }
+
+        // Request a decode queue if the device supports it
+        if (_decode_queue_family_index >= 0) {
+            float                                    priority = 1.0f;
+            std::vector<vkb::CustomQueueDescription> queue_descs;
+            queue_descs.push_back(vkb::CustomQueueDescription(graphics_queue_family, {priority}));
+            if (static_cast<uint32_t>(_decode_queue_family_index) != graphics_queue_family) {
+                queue_descs.push_back(
+                    vkb::CustomQueueDescription(static_cast<uint32_t>(_decode_queue_family_index), {priority}));
+            }
+            device_builder.custom_queue_setup(std::move(queue_descs));
+        }
 
         auto device_res = device_builder.build();
         if (!device_res) {
             CASPAR_THROW_EXCEPTION(caspar_exception()
                                    << msg_info("Failed to create device: " + device_res.error().message()));
         }
-        auto vkb_device = device_res.value();
-        _device         = vk::Device(vkb_device.device);
+        auto vkb_device            = device_res.value();
+        _device                    = vk::Device(vkb_device.device);
+        _enabled_device_extensions = _vkb_physical_device.get_extensions();
         VULKAN_HPP_DEFAULT_DISPATCHER.init(_device);
-        _queue              = vk::Queue(vkb_device.get_queue(vkb::QueueType::graphics).value());
-        _queue_family_index = vkb_device.get_queue_index(vkb::QueueType::graphics).value();
+
+        _queue              = _device.getQueue(graphics_queue_family, 0);
+        _queue_family_index = graphics_queue_family;
         auto queue_family   = _queue_family_index;
 
         vk::CommandPoolCreateInfo pool_info;
@@ -774,14 +817,16 @@ std::vector<vk::CommandBuffer>     device::allocateCommandBuffers(uint32_t count
 {
     return impl_->allocateCommandBuffers(count);
 }
-void       device::submit(const vk::SubmitInfo& submitInfo, vk::Fence fence) { impl_->submit(submitInfo, fence); }
-vk::Device         device::getVkDevice() const { return impl_->_device; }
-VkInstance         device::getVkInstance() const { return static_cast<VkInstance>(impl_->_vkb_instance.instance); }
-VkPhysicalDevice   device::getVkPhysicalDevice() const { return static_cast<VkPhysicalDevice>(impl_->_physical_device); }
-uint32_t           device::getGraphicsQueueFamilyIndex() const { return impl_->_queue_family_index; }
-VkQueue            device::getGraphicsQueue() const { return static_cast<VkQueue>(impl_->_queue); }
+void             device::submit(const vk::SubmitInfo& submitInfo, vk::Fence fence) { impl_->submit(submitInfo, fence); }
+vk::Device       device::getVkDevice() const { return impl_->_device; }
+VkInstance       device::getVkInstance() const { return static_cast<VkInstance>(impl_->_vkb_instance.instance); }
+VkPhysicalDevice device::getVkPhysicalDevice() const { return static_cast<VkPhysicalDevice>(impl_->_physical_device); }
+uint32_t         device::getGraphicsQueueFamilyIndex() const { return impl_->_queue_family_index; }
+VkQueue          device::getGraphicsQueue() const { return static_cast<VkQueue>(impl_->_queue); }
 PFN_vkGetInstanceProcAddr device::getInstanceProcAddr() const { return impl_->_vkb_instance.fp_vkGetInstanceProcAddr; }
-std::shared_ptr<pipeline> device::get_pipeline(common::bit_depth depth)
+int                       device::getDecodeQueueFamilyIndex() const { return impl_->_decode_queue_family_index; }
+const std::vector<std::string>& device::getEnabledDeviceExtensions() const { return impl_->_enabled_device_extensions; }
+std::shared_ptr<pipeline>       device::get_pipeline(common::bit_depth depth)
 {
     return impl_->_pipelines[depth == common::bit_depth::bit8 ? 0 : 1];
 }

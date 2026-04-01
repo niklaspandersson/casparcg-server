@@ -15,7 +15,7 @@ CMD="$CMD -v $PWD/media:/opt/casparcg/media"
 
 HAS_NVIDIA_RUNTIME=$(docker info | grep -i nvidia)
 if [ ! -z "$HAS_NVIDIA_RUNTIME" ]; then
-  CMD="$CMD --runtime=nvidia"
+  CMD="$CMD --runtime=nvidia --gpus all"
 else
   # assume intel, so setup for that
   CMD="$CMD --device /dev/dri"
@@ -32,16 +32,16 @@ if [ -f "$DECKLINK_API_SO" ]; then
   done
 fi
 
-if [ ! -z "$XAUTHORITY" ]; then
-  CMD="$CMD -v $XAUTHORITY:/root/.Xauthority:ro"
-elif [ -f "$HOME/.Xauthority" ]; then
-  CMD="$CMD -v $HOME/.Xauthority:/root/.Xauthority:ro"
-else
-  echo "Failed to find Xauthority file"
-  exit 9
-fi
+# if [ ! -z "$XAUTHORITY" ]; then
+#   CMD="$CMD -v $XAUTHORITY:/root/.Xauthority:ro"
+# elif [ -f "$HOME/.Xauthority" ]; then
+#   CMD="$CMD -v $HOME/.Xauthority:/root/.Xauthority:ro"
+# else
+#   echo "Failed to find Xauthority file"
+#   exit 9
+# fi
 
-CMD="$CMD -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix:ro"
+# CMD="$CMD -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix:ro"
 
 CMD="$CMD casparcg/server"
 

@@ -25,6 +25,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace caspar { namespace core {
@@ -50,7 +51,9 @@ class gpu_accelerator
     virtual void*    vk_device() const               = 0; // VkDevice
     virtual uint32_t queue_family_index() const      = 0;
     virtual void*    vk_queue() const                = 0; // VkQueue
-    virtual void*    vk_get_instance_proc_addr() const = 0; // PFN_vkGetInstanceProcAddr
+    virtual void*    vk_get_instance_proc_addr() const          = 0; // PFN_vkGetInstanceProcAddr
+    virtual const std::vector<std::string>& vk_enabled_device_extensions() const = 0;
+    virtual int    vk_decode_queue_family_index() const = 0; // -1 if not available
 
     // --- VkImage import ---
     // Import externally-owned VkImages (e.g. from hw decode) as a frame.

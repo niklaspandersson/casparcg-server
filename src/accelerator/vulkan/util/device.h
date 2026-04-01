@@ -28,6 +28,8 @@
 
 #include <functional>
 #include <future>
+#include <string>
+#include <vector>
 
 #include <vulkan/vulkan.hpp>
 
@@ -72,6 +74,8 @@ class device final
     uint32_t                           getGraphicsQueueFamilyIndex() const;
     VkQueue                            getGraphicsQueue() const;
     PFN_vkGetInstanceProcAddr          getInstanceProcAddr() const;
+    int                                getDecodeQueueFamilyIndex() const;
+    const std::vector<std::string>&    getEnabledDeviceExtensions() const;
 
     std::shared_ptr<class texture>
     create_attachment(int width, int height, common::bit_depth depth, uint32_t components_count);

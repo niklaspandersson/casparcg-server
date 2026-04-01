@@ -59,6 +59,16 @@ void* gpu_accelerator_impl::vk_get_instance_proc_addr() const
     return reinterpret_cast<void*>(vulkan_->getInstanceProcAddr());
 }
 
+const std::vector<std::string>& gpu_accelerator_impl::vk_enabled_device_extensions() const
+{
+    return vulkan_->getEnabledDeviceExtensions();
+}
+
+int gpu_accelerator_impl::vk_decode_queue_family_index() const
+{
+    return vulkan_->getDecodeQueueFamilyIndex();
+}
+
 core::mutable_frame gpu_accelerator_impl::import_gpu_images(const void*                              tag,
                                                              const std::vector<core::gpu_image_desc>& planes,
                                                              const core::pixel_format_desc&           desc,

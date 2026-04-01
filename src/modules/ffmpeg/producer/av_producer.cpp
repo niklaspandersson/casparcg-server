@@ -254,6 +254,7 @@ class Decoder
     boost::thread thread;
 
     AVBufferRef* hw_device_ctx_ = nullptr;
+    std::vector<const char*> hw_dev_ext_ptrs_; // must outlive hw_device_ctx_
 
 #ifdef ENABLE_VULKAN
     static AVPixelFormat get_hw_format(AVCodecContext*, const AVPixelFormat* pix_fmts)
@@ -262,8 +263,7 @@ class Decoder
             if (*p == AV_PIX_FMT_VULKAN)
                 return *p;
         }
-        // Fallback to first software format
-        return pix_fmts[0];
+        return AV_PIX_FMT_NONE;
     }
 #endif
 
@@ -334,19 +334,62 @@ class Decoder
                             vulkan_ctx->phys_dev = static_cast<VkPhysicalDevice>(gpu->vk_physical_device());
                             vulkan_ctx->act_dev  = static_cast<VkDevice>(gpu->vk_device());
 
+                            // Tell FFmpeg which device extensions are enabled (must outlive the hw device ctx)
+                            const auto& dev_exts = gpu->vk_enabled_device_extensions();
+                            hw_dev_ext_ptrs_.clear();
+                            hw_dev_ext_ptrs_.reserve(dev_exts.size());
+                            for (const auto& ext : dev_exts)
+                                hw_dev_ext_ptrs_.push_back(ext.c_str());
+                            vulkan_ctx->enabled_dev_extensions    = hw_dev_ext_ptrs_.data();
+                            vulkan_ctx->nb_enabled_dev_extensions = static_cast<int>(hw_dev_ext_ptrs_.size());
+
                             auto qfi = gpu->queue_family_index();
+                            auto decode_qfi = gpu->vk_decode_queue_family_index();
 
                             // New queue family API
-                            vulkan_ctx->qf[0].idx   = static_cast<int>(qfi);
-                            vulkan_ctx->qf[0].num   = 1;
-                            vulkan_ctx->qf[0].flags = VK_QUEUE_GRAPHICS_BIT;
-                            vulkan_ctx->nb_qf       = 1;
+                            int nb_qf = 0;
+                            vulkan_ctx->qf[nb_qf].idx   = static_cast<int>(qfi);
+                            vulkan_ctx->qf[nb_qf].num   = 1;
+                            vulkan_ctx->qf[nb_qf].flags = static_cast<VkQueueFlagBits>(VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT);
+                            nb_qf++;
+
+                            if (decode_qfi >= 0) {
+                                // Query supported video codec operations for the decode queue family
+                                VkQueueFamilyVideoPropertiesKHR video_props = {};
+                                video_props.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR;
+                                VkQueueFamilyProperties2 qf_props = {};
+                                qf_props.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
+                                qf_props.pNext = &video_props;
+
+                                auto get_proc = vulkan_ctx->get_proc_addr;
+                                auto vkGetPhysicalDeviceQueueFamilyProperties2_ =
+                                    reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties2>(
+                                        get_proc(vulkan_ctx->inst, "vkGetPhysicalDeviceQueueFamilyProperties2"));
+
+                                uint32_t qf_count = 0;
+                                vkGetPhysicalDeviceQueueFamilyProperties2_(vulkan_ctx->phys_dev, &qf_count, nullptr);
+                                std::vector<VkQueueFamilyVideoPropertiesKHR> all_video_props(qf_count, {VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR});
+                                std::vector<VkQueueFamilyProperties2> all_qf_props(qf_count, {VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
+                                for (uint32_t i = 0; i < qf_count; i++)
+                                    all_qf_props[i].pNext = &all_video_props[i];
+                                vkGetPhysicalDeviceQueueFamilyProperties2_(vulkan_ctx->phys_dev, &qf_count, all_qf_props.data());
+
+                                vulkan_ctx->qf[nb_qf].idx       = decode_qfi;
+                                vulkan_ctx->qf[nb_qf].num       = 1;
+                                vulkan_ctx->qf[nb_qf].flags     = VK_QUEUE_VIDEO_DECODE_BIT_KHR;
+                                vulkan_ctx->qf[nb_qf].video_caps = static_cast<VkVideoCodecOperationFlagBitsKHR>(
+                                    all_video_props[decode_qfi].videoCodecOperations);
+                                nb_qf++;
+                            }
+                            vulkan_ctx->nb_qf = nb_qf;
 
                             // Deprecated fields (still required for compatibility)
                             vulkan_ctx->queue_family_index    = qfi;
                             vulkan_ctx->queue_family_tx_index = qfi;
                             vulkan_ctx->nb_graphics_queues    = 1;
                             vulkan_ctx->nb_tx_queues          = 1;
+                            vulkan_ctx->queue_family_decode_index = decode_qfi;
+                            vulkan_ctx->nb_decode_queues         = decode_qfi >= 0 ? 1 : 0;
 
                             auto ret = av_hwdevice_ctx_init(device_ref);
                             if (ret >= 0) {
@@ -364,6 +407,15 @@ class Decoder
                     }
                 } catch (...) {
                     CASPAR_LOG(warning) << "Failed to set up hardware decoding, falling back to CPU decode";
+                }
+
+                // If hw decode setup failed for any reason, ensure no hw state leaks into the codec context
+                if (!hw_decode_active) {
+                    ctx->hw_device_ctx = nullptr;
+                    ctx->get_format    = nullptr;
+                    if (hw_device_ctx_) {
+                        av_buffer_unref(&hw_device_ctx_);
+                    }
                 }
             }
 #endif
