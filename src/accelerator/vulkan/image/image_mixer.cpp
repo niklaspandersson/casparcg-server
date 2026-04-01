@@ -24,6 +24,7 @@
 
 #include "../util/buffer.h"
 #include "../util/device.h"
+#include "../util/gpu_accelerator_impl.h"
 #include "../util/renderpass.h"
 #include "../util/texture.h"
 
@@ -257,6 +258,7 @@ struct image_mixer::impl
 {
     spl::shared_ptr<device>      vulkan_;
     image_renderer               renderer_;
+    gpu_accelerator_impl         gpu_accelerator_;
     std::vector<draw_transforms> transform_stack_;
     std::vector<layer>           layers_; // layer/stream/items
     std::vector<layer*>          layer_stack_;
@@ -270,6 +272,7 @@ struct image_mixer::impl
          common::bit_depth              depth)
         : vulkan_(device)
         , renderer_(device, max_frame_size, depth)
+        , gpu_accelerator_(device)
         , transform_stack_(1)
     {
         CASPAR_LOG(info) << L"Initialized Vulkan Accelerated GPU Image Mixer for channel " << channel_id;
@@ -377,6 +380,8 @@ struct image_mixer::impl
     }
 
     common::bit_depth depth() const { return renderer_.depth(); }
+
+    core::gpu_accelerator* get_gpu_accelerator() override { return &gpu_accelerator_; }
 };
 
 image_mixer::image_mixer(const spl::shared_ptr<device>& vulkan,
@@ -407,5 +412,7 @@ image_mixer::create_frame(const void* tag, const core::pixel_format_desc& desc, 
 }
 
 common::bit_depth image_mixer::depth() const { return impl_->depth(); }
+
+core::gpu_accelerator* image_mixer::get_gpu_accelerator() { return impl_->get_gpu_accelerator(); }
 
 }}} // namespace caspar::accelerator::vulkan

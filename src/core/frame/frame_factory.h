@@ -52,6 +52,7 @@ class frame_factory
                                                  core::pixel_format                                      format,
                                                  common::bit_depth                                       depth) = 0;
 #endif
+    virtual class gpu_accelerator* get_gpu_accelerator() { return nullptr; }
 };
 
 }} // namespace caspar::core

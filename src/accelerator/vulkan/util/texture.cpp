@@ -36,8 +36,9 @@ struct texture::impl
     GLsizei           width_  = 0;
     GLsizei           height_ = 0;
     GLsizei           stride_ = 0;
-    GLsizei           size_   = 0;
+    GLsizei           size_       = 0;
     common::bit_depth depth_;
+    bool              owns_image_ = true;
 
     impl(const impl&)            = delete;
     impl& operator=(const impl&) = delete;
@@ -66,8 +67,10 @@ struct texture::impl
     ~impl()
     {
         device_.destroyImageView(imageView_);
-        device_.freeMemory(memory_);
-        device_.destroyImage(image_);
+        if (owns_image_) {
+            device_.freeMemory(memory_);
+            device_.destroyImage(image_);
+        }
     }
 };
 
@@ -102,5 +105,30 @@ common::bit_depth texture::depth() const { return impl_->depth_; }
 void              texture::set_depth(common::bit_depth depth) { impl_->depth_ = depth; }
 int               texture::size() const { return impl_->size_; }
 VkImage           texture::id() const { return impl_->image_; }
+
+std::shared_ptr<texture> texture::wrap_external(vk::Device        device,
+                                                vk::Image         image,
+                                                int               width,
+                                                int               height,
+                                                int               stride,
+                                                vk::Format        format,
+                                                common::bit_depth depth)
+{
+    vk::ImageViewCreateInfo view_info;
+    view_info.image                           = image;
+    view_info.viewType                        = vk::ImageViewType::e2D;
+    view_info.format                          = format;
+    view_info.subresourceRange.aspectMask     = vk::ImageAspectFlagBits::eColor;
+    view_info.subresourceRange.baseMipLevel   = 0;
+    view_info.subresourceRange.levelCount     = 1;
+    view_info.subresourceRange.baseArrayLayer = 0;
+    view_info.subresourceRange.layerCount     = 1;
+
+    auto image_view = device.createImageView(view_info);
+
+    auto tex            = std::make_shared<texture>(width, height, stride, depth, image, vk::DeviceMemory{}, image_view, device);
+    tex->impl_->owns_image_ = false;
+    return tex;
+}
 
 }}} // namespace caspar::accelerator::vulkan

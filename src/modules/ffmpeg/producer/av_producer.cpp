@@ -24,6 +24,7 @@
 
 #include <core/frame/draw_frame.h>
 #include <core/frame/frame_factory.h>
+#include <core/frame/gpu_accelerator.h>
 #include <core/monitor/monitor.h>
 
 extern "C" {
@@ -35,6 +36,12 @@ extern "C" {
 #include <libavutil/avutil.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/error.h>
+#include <libavutil/hwcontext.h>
+#include <libavutil/imgutils.h>
+#include <libavutil/pixdesc.h>
+#ifdef ENABLE_VULKAN
+#include <libavutil/hwcontext_vulkan.h>
+#endif
 #include <libavutil/opt.h>
 #include <libavutil/pixfmt.h>
 #include <libavutil/samplefmt.h>
@@ -42,6 +49,7 @@ extern "C" {
 
 #include <algorithm>
 #include <atomic>
+#include <cstring>
 #include <deque>
 #include <iomanip>
 #include <memory>
@@ -49,6 +57,8 @@ extern "C" {
 #include <sstream>
 #include <string>
 #include <thread>
+
+#define FFMPEG_NEW_CHANNEL_LAYOUT 1
 
 namespace caspar { namespace ffmpeg {
 
@@ -116,6 +126,112 @@ core::color_space get_color_space(const std::shared_ptr<AVFrame>& video)
     return result;
 }
 
+#ifdef ENABLE_VULKAN
+core::draw_frame make_hw_frame(void*                            tag,
+                               core::gpu_accelerator&           gpu,
+                               std::shared_ptr<AVFrame>         video,
+                               std::shared_ptr<AVFrame>         audio,
+                               core::color_space                color_space,
+                               core::frame_geometry::scale_mode scale_mode)
+{
+    if (!video || !video->data[0]) {
+        return core::draw_frame{};
+    }
+
+    auto* vk_frame = reinterpret_cast<AVVkFrame*>(video->data[0]);
+
+    // Determine pixel format from the sw_format of the hw frames context
+    auto* hw_ctx      = reinterpret_cast<AVHWFramesContext*>(video->hw_frames_ctx->data);
+    auto* vk_frames   = static_cast<AVVulkanFramesContext*>(hw_ctx->hwctx);
+    auto  sw_fmt      = hw_ctx->sw_format;
+
+    auto [pix_fmt, depth] = get_pixel_format(sw_fmt);
+    auto desc             = core::pixel_format_desc(pix_fmt, color_space);
+
+    // Build plane descriptors and gpu_image_desc from the AVVkFrame
+    std::vector<core::gpu_image_desc> gpu_planes;
+
+    // NV12/P010: 2 planes - Y (single channel) + UV (two channels interleaved)
+    // YUV420P etc: 3 planes
+    const AVPixFmtDescriptor* pix_desc = av_pix_fmt_desc_get(sw_fmt);
+    int num_planes = 0;
+    for (int i = 0; i < 4 && pix_desc; ++i) {
+        if (pix_desc->comp[i].plane >= num_planes)
+            num_planes = pix_desc->comp[i].plane + 1;
+    }
+
+    for (int i = 0; i < num_planes; ++i) {
+        core::gpu_image_desc plane_desc;
+        plane_desc.vk_image  = vk_frame->img[i];
+        plane_desc.vk_format = static_cast<uint32_t>(vk_frames->format[i]);
+
+        if (i == 0) {
+            plane_desc.width  = video->width;
+            plane_desc.height = video->height;
+        } else {
+            // Chroma planes are typically half size for 4:2:0
+            auto chroma_w = AV_CEIL_RSHIFT(video->width, (sw_fmt == AV_PIX_FMT_NV12 || sw_fmt == AV_PIX_FMT_P010LE ||
+                                                           sw_fmt == AV_PIX_FMT_YUV420P || sw_fmt == AV_PIX_FMT_YUV420P10LE)
+                                                              ? 1
+                                                              : 0);
+            auto chroma_h = AV_CEIL_RSHIFT(video->height, (sw_fmt == AV_PIX_FMT_NV12 || sw_fmt == AV_PIX_FMT_P010LE ||
+                                                            sw_fmt == AV_PIX_FMT_YUV420P || sw_fmt == AV_PIX_FMT_YUV420P10LE)
+                                                               ? 1
+                                                               : 0);
+            plane_desc.width  = chroma_w;
+            plane_desc.height = chroma_h;
+        }
+
+        gpu_planes.push_back(plane_desc);
+
+        // Build matching pixel_format_desc plane
+        int stride = (i == 0) ? 1 : ((sw_fmt == AV_PIX_FMT_NV12 || sw_fmt == AV_PIX_FMT_P010LE) ? 2 : 1);
+        desc.planes.push_back(
+            core::pixel_format_desc::plane(plane_desc.width, plane_desc.height, stride, depth));
+    }
+
+    // Prepare audio data
+    array<std::int32_t> audio_data;
+    if (audio) {
+        const int channel_count = 16;
+        audio_data              = std::vector<int32_t>(audio->nb_samples * channel_count, 0);
+
+#if FFMPEG_NEW_CHANNEL_LAYOUT
+        auto source_channel_count = audio->ch_layout.nb_channels;
+#else
+        auto source_channel_count = audio->channels;
+#endif
+
+        if (source_channel_count == channel_count) {
+            std::memcpy(audio_data.data(),
+                        reinterpret_cast<int32_t*>(audio->data[0]),
+                        sizeof(int32_t) * channel_count * audio->nb_samples);
+        } else {
+            auto dst = audio_data.data();
+            auto src = reinterpret_cast<int32_t*>(audio->data[0]);
+            for (auto i = 0; i < audio->nb_samples; i++) {
+                for (auto j = 0; j < std::min(channel_count, source_channel_count); ++j) {
+                    dst[i * channel_count + j] = src[i * source_channel_count + j];
+                }
+            }
+        }
+    }
+
+    // Keep the AVFrame alive until the mixer is done with its VkImages
+    auto lifetime = std::shared_ptr<void>(
+        av_frame_clone(video.get()), [](void* p) {
+            auto* f = static_cast<AVFrame*>(p);
+            av_frame_free(&f);
+        });
+
+    auto mf = gpu.import_gpu_images(tag, gpu_planes, desc, std::move(audio_data), std::move(lifetime));
+    if (scale_mode != core::frame_geometry::scale_mode::stretch) {
+        mf.geometry() = core::frame_geometry::get_default(scale_mode);
+    }
+    return core::draw_frame(std::move(mf));
+}
+#endif
+
 class Decoder
 {
     Decoder(const Decoder&)            = delete;
@@ -137,12 +253,27 @@ class Decoder
 
     boost::thread thread;
 
+    AVBufferRef* hw_device_ctx_ = nullptr;
+
+#ifdef ENABLE_VULKAN
+    static AVPixelFormat get_hw_format(AVCodecContext*, const AVPixelFormat* pix_fmts)
+    {
+        for (auto p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
+            if (*p == AV_PIX_FMT_VULKAN)
+                return *p;
+        }
+        // Fallback to first software format
+        return pix_fmts[0];
+    }
+#endif
+
   public:
     std::shared_ptr<AVCodecContext> ctx;
+    bool                           hw_decode_active = false;
 
     Decoder() = default;
 
-    explicit Decoder(AVStream* stream)
+    explicit Decoder(AVStream* stream, core::gpu_accelerator* gpu = nullptr)
         : st(stream)
     {
         const auto codec = get_decoder(stream->codecpar->codec_id);
@@ -174,6 +305,68 @@ class Decoder
         if (ctx->codec_type == AVMEDIA_TYPE_VIDEO) {
             ctx->framerate           = av_guess_frame_rate(nullptr, stream, nullptr);
             ctx->sample_aspect_ratio = av_guess_sample_aspect_ratio(nullptr, stream, nullptr);
+
+            // Try to set up hardware decoding
+#ifdef ENABLE_VULKAN
+            if (gpu) {
+                try {
+                    // Check if the codec supports Vulkan hw decode
+                    bool vulkan_supported = false;
+                    for (int i = 0;; i++) {
+                        const AVCodecHWConfig* config = avcodec_get_hw_config(codec, i);
+                        if (!config)
+                            break;
+                        if (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX &&
+                            config->device_type == AV_HWDEVICE_TYPE_VULKAN) {
+                            vulkan_supported = true;
+                            break;
+                        }
+                    }
+
+                    if (vulkan_supported) {
+                        // Create AVHWDeviceContext sharing the accelerator's Vulkan device
+                        AVBufferRef* device_ref = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_VULKAN);
+                        if (device_ref) {
+                            auto* device_ctx     = reinterpret_cast<AVHWDeviceContext*>(device_ref->data);
+                            auto* vulkan_ctx       = static_cast<AVVulkanDeviceContext*>(device_ctx->hwctx);
+                            vulkan_ctx->get_proc_addr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(gpu->vk_get_instance_proc_addr());
+                            vulkan_ctx->inst     = static_cast<VkInstance>(gpu->vk_instance());
+                            vulkan_ctx->phys_dev = static_cast<VkPhysicalDevice>(gpu->vk_physical_device());
+                            vulkan_ctx->act_dev  = static_cast<VkDevice>(gpu->vk_device());
+
+                            auto qfi = gpu->queue_family_index();
+
+                            // New queue family API
+                            vulkan_ctx->qf[0].idx   = static_cast<int>(qfi);
+                            vulkan_ctx->qf[0].num   = 1;
+                            vulkan_ctx->qf[0].flags = VK_QUEUE_GRAPHICS_BIT;
+                            vulkan_ctx->nb_qf       = 1;
+
+                            // Deprecated fields (still required for compatibility)
+                            vulkan_ctx->queue_family_index    = qfi;
+                            vulkan_ctx->queue_family_tx_index = qfi;
+                            vulkan_ctx->nb_graphics_queues    = 1;
+                            vulkan_ctx->nb_tx_queues          = 1;
+
+                            auto ret = av_hwdevice_ctx_init(device_ref);
+                            if (ret >= 0) {
+                                ctx->hw_device_ctx = av_buffer_ref(device_ref);
+                                ctx->get_format    = get_hw_format;
+                                hw_device_ctx_     = device_ref;
+                                hw_decode_active   = true;
+                                CASPAR_LOG(info) << "Hardware decoding enabled (Vulkan) for stream " << stream->index;
+                            } else {
+                                av_buffer_unref(&device_ref);
+                                CASPAR_LOG(warning) << "Failed to initialize Vulkan hw device context, "
+                                                       "falling back to CPU decode";
+                            }
+                        }
+                    }
+                } catch (...) {
+                    CASPAR_LOG(warning) << "Failed to set up hardware decoding, falling back to CPU decode";
+                }
+            }
+#endif
         } else if (ctx->codec_type == AVMEDIA_TYPE_AUDIO) {
         }
 
@@ -278,7 +471,12 @@ class Decoder
         } catch (boost::thread_interrupted&) {
             // Do nothing...
         }
+        if (hw_device_ctx_) {
+            av_buffer_unref(&hw_device_ctx_);
+        }
     }
+
+    bool is_eof() const { return eof; }
 
     bool want_packet() const
     {
@@ -706,6 +904,10 @@ struct AVProducer::Impl
     std::string afilter_;
     std::string vfilter_;
 
+    core::gpu_accelerator* gpu_accelerator_    = nullptr;
+    bool                   hw_decode_active_   = false;
+    int                    hw_video_stream_idx_ = -1;
+
     int                              seekable_ = 2;
     core::frame_geometry::scale_mode scale_mode_;
     int64_t                          frame_count_    = 0;
@@ -760,6 +962,8 @@ struct AVProducer::Impl
         graph_->set_color("frame-time", diagnostics::color(0.0f, 1.0f, 0.0f));
         graph_->set_color("decode-time", diagnostics::color(0.0f, 1.0f, 1.0f));
         graph_->set_color("buffer", diagnostics::color(1.0f, 1.0f, 0.0f));
+
+        gpu_accelerator_ = frame_factory_ ? frame_factory_->get_gpu_accelerator() : nullptr;
 
         state_["file/name"] = u8(name_);
         state_["file/path"] = u8(path_);
@@ -874,7 +1078,11 @@ struct AVProducer::Impl
                 start       = start != AV_NOPTS_VALUE ? start : 0;
                 auto end    = duration != AV_NOPTS_VALUE ? start + duration : INT64_MAX;
                 auto time   = frame.pts != AV_NOPTS_VALUE ? frame.pts + frame.duration : 0;
-                buffer_eof_ = (video_filter_.eof && audio_filter_.eof) ||
+                bool video_eof = hw_decode_active_
+                                    ? (decoders_.count(hw_video_stream_idx_) > 0 &&
+                                       decoders_.at(hw_video_stream_idx_).is_eof())
+                                    : video_filter_.eof;
+                buffer_eof_ = (video_eof && audio_filter_.eof) ||
                               av_rescale_q(time, TIME_BASE_Q, format_tb_) >= av_rescale_q(end, TIME_BASE_Q, format_tb_);
 
                 if (buffer_eof_) {
@@ -889,13 +1097,23 @@ struct AVProducer::Impl
                 }
             }
 
-            bool progress = false;
+            bool                     progress      = false;
+            std::shared_ptr<AVFrame> hw_video_frame = nullptr;
             {
                 progress |= schedule();
 
                 std::vector<std::future<bool>> futures;
 
-                if (!video_filter_.frame) {
+                if (hw_decode_active_) {
+                    // Pull video directly from hw decoder - no filter graph
+                    auto it = decoders_.find(hw_video_stream_idx_);
+                    if (it != decoders_.end()) {
+                        hw_video_frame = it->second.pop();
+                        if (hw_video_frame) {
+                            progress = true;
+                        }
+                    }
+                } else if (!video_filter_.frame) {
                     futures.push_back(video_executor_->begin_invoke([&]() { return video_filter_(); }));
                 }
 
@@ -908,22 +1126,28 @@ struct AVProducer::Impl
                 }
             }
 
-            if ((!video_filter_.frame && !video_filter_.eof) || (!audio_filter_.frame && !audio_filter_.eof)) {
-                if (!progress) {
-                    if (warning_debounce++ % 500 == 100) {
-                        if (!video_filter_.frame && !video_filter_.eof) {
-                            CASPAR_LOG(warning) << print() << " Waiting for video frame...";
-                        } else if (!audio_filter_.frame && !audio_filter_.eof) {
-                            CASPAR_LOG(warning) << print() << " Waiting for audio frame...";
-                        } else {
-                            CASPAR_LOG(warning) << print() << " Waiting for frame...";
-                        }
-                    }
+            {
+                bool waiting_video = hw_decode_active_ ? (!hw_video_frame)
+                                                       : (!video_filter_.frame && !video_filter_.eof);
+                bool waiting_audio = !audio_filter_.frame && !audio_filter_.eof;
 
-                    // TODO (perf): Avoid live loop.
-                    std::this_thread::sleep_for(std::chrono::milliseconds(warning_debounce > 25 ? 20 : 5));
+                if (waiting_video || waiting_audio) {
+                    if (!progress) {
+                        if (warning_debounce++ % 500 == 100) {
+                            if (waiting_video) {
+                                CASPAR_LOG(warning) << print() << " Waiting for video frame...";
+                            } else if (waiting_audio) {
+                                CASPAR_LOG(warning) << print() << " Waiting for audio frame...";
+                            } else {
+                                CASPAR_LOG(warning) << print() << " Waiting for frame...";
+                            }
+                        }
+
+                        // TODO (perf): Avoid live loop.
+                        std::this_thread::sleep_for(std::chrono::milliseconds(warning_debounce > 25 ? 20 : 5));
+                    }
+                    continue;
                 }
-                continue;
             }
 
             warning_debounce = 0;
@@ -936,7 +1160,19 @@ struct AVProducer::Impl
 
             const auto start_time = input_->start_time != AV_NOPTS_VALUE ? input_->start_time : 0;
 
-            if (video_filter_.frame) {
+            if (hw_decode_active_ && hw_video_frame) {
+                // Hardware decode path - video frame comes directly from decoder
+                frame.video      = std::move(hw_video_frame);
+                frame.start_time = start_time;
+                if (frame.video->data[0]) {
+                    auto tb          = decoders_.at(hw_video_stream_idx_).ctx->pkt_timebase;
+                    auto fr          = decoders_.at(hw_video_stream_idx_).ctx->framerate;
+                    frame.pts        = av_rescale_q(frame.video->pts, tb, TIME_BASE_Q) - start_time;
+                    frame.duration   = (fr.num > 0 && fr.den > 0)
+                                         ? av_rescale_q(1, av_inv_q(fr), TIME_BASE_Q)
+                                         : 0;
+                }
+            } else if (video_filter_.frame) {
                 frame.video      = std::move(video_filter_.frame);
                 const auto tb    = av_buffersink_get_time_base(video_filter_.sink);
                 const auto fr    = av_buffersink_get_frame_rate(video_filter_.sink);
@@ -954,8 +1190,17 @@ struct AVProducer::Impl
                 frame.duration   = av_rescale_q(frame.audio->nb_samples, {1, sr}, TIME_BASE_Q);
             }
 
-            frame.frame = core::draw_frame(
-                make_frame(this, *frame_factory_, frame.video, frame.audio, get_color_space(frame.video), scale_mode_));
+#ifdef ENABLE_VULKAN
+            if (hw_decode_active_ && frame.video && frame.video->data[0]) {
+                // Hardware decode path: import GPU textures directly via gpu_accelerator
+                frame.frame = make_hw_frame(this, *gpu_accelerator_, frame.video, frame.audio,
+                                            get_color_space(frame.video), scale_mode_);
+            } else
+#endif
+            {
+                frame.frame = core::draw_frame(
+                    make_frame(this, *frame_factory_, frame.video, frame.audio, get_color_space(frame.video), scale_mode_));
+            }
             frame.frame_count = frame_count_++;
 
             graph_->set_value("decode-time", decode_timer.elapsed() * format_desc_.fps * 0.5);
@@ -1234,7 +1479,47 @@ struct AVProducer::Impl
 
     void reset(int64_t start_time)
     {
-        video_filter_ = Filter(vfilter_, input_, decoders_, start_time, AVMEDIA_TYPE_VIDEO, format_desc_);
+        hw_decode_active_    = false;
+        hw_video_stream_idx_ = -1;
+
+        // Determine if we can use hardware decode:
+        // Only when there's no user-specified video filter and a gpu accelerator is available.
+        bool try_hw_decode = gpu_accelerator_ != nullptr && vfilter_.empty();
+
+        if (try_hw_decode) {
+            // Find the first video stream and create a hw-accelerated decoder for it.
+            // Skip the video filter graph entirely - frames stay on GPU.
+            for (auto n = 0U; n < input_->nb_streams; ++n) {
+                auto st = input_->streams[n];
+                if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+                    auto it = decoders_.find(st->index);
+                    if (it == decoders_.end()) {
+                        it = decoders_.emplace(std::piecewise_construct,
+                                               std::forward_as_tuple(st->index),
+                                               std::forward_as_tuple(st, gpu_accelerator_))
+                                 .first;
+                    }
+                    if (it->second.hw_decode_active) {
+                        hw_decode_active_    = true;
+                        hw_video_stream_idx_ = st->index;
+                        CASPAR_LOG(info) << print() << " Using hardware video decode path (no video filters)";
+                    } else {
+                        CASPAR_LOG(info) << print() << " Hardware decode not available for this codec, "
+                                                       "falling back to CPU decode with filters";
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (!hw_decode_active_) {
+            // Standard path: use video filter graph with CPU decode
+            video_filter_ = Filter(vfilter_, input_, decoders_, start_time, AVMEDIA_TYPE_VIDEO, format_desc_);
+        } else {
+            // No video filter graph - hw decoded frames bypass filters entirely
+            video_filter_ = Filter();
+        }
+
         audio_filter_ = Filter(afilter_, input_, decoders_, start_time, AVMEDIA_TYPE_AUDIO, format_desc_);
 
         sources_.clear();
@@ -1243,6 +1528,15 @@ struct AVProducer::Impl
         }
         for (auto& p : audio_filter_.sources) {
             sources_[p.first].push_back(p.second);
+        }
+
+        // For hw decode, the video decoder is driven directly (not through filter sources),
+        // but we still need to feed it packets via schedule().
+        if (hw_decode_active_) {
+            // Ensure the hw video decoder is in sources_ so schedule() feeds it packets
+            if (sources_.find(hw_video_stream_idx_) == sources_.end()) {
+                sources_[hw_video_stream_idx_] = {}; // empty filter list, but marks stream as active
+            }
         }
 
         std::vector<int> keys;

@@ -56,6 +56,17 @@ class texture final
     int               size() const;
     VkImage           id() const;
 
+    // Wrap an externally-owned VkImage. Only the VkImageView is created and destroyed
+    // by this texture - the image and its memory are owned by the caller.
+    // The caller must ensure the VkImage outlives this texture.
+    static std::shared_ptr<texture> wrap_external(vk::Device        device,
+                                                  vk::Image         image,
+                                                  int               width,
+                                                  int               height,
+                                                  int               stride,
+                                                  vk::Format        format,
+                                                  common::bit_depth depth);
+
   private:
     struct impl;
     std::unique_ptr<impl> impl_;

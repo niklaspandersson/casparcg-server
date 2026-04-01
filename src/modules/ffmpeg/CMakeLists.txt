@@ -47,3 +47,8 @@ else()
 			${FFMPEG_LIBRARIES}
 	)
 endif()
+
+IF(ENABLE_VULKAN)
+	target_compile_definitions(ffmpeg PRIVATE ENABLE_VULKAN)
+	target_link_libraries(ffmpeg PRIVATE Vulkan::Headers)
+ENDIF()

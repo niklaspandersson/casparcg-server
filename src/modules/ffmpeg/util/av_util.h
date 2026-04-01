@@ -12,6 +12,7 @@ extern "C" {
 
 #include <map>
 #include <memory>
+#include <tuple>
 #include <vector>
 
 struct AVFrame;
@@ -24,6 +25,8 @@ namespace caspar { namespace ffmpeg {
 
 std::shared_ptr<AVFrame>  alloc_frame();
 std::shared_ptr<AVPacket> alloc_packet();
+
+std::tuple<core::pixel_format, common::bit_depth> get_pixel_format(AVPixelFormat pix_fmt);
 
 core::pixel_format_desc pixel_format_desc(AVPixelFormat     pix_fmt,
                                           int               width,

@@ -42,6 +42,8 @@ enum class pixel_format
     uyvy,
     gbrp,  // planar
     gbrap, // planar
+    nv12,  // semi-planar: Y + interleaved UV
+    p010,  // semi-planar 10-bit: Y + interleaved UV
     count,
     invalid,
 };

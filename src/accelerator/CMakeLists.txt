@@ -49,6 +49,7 @@ IF(ENABLE_VULKAN)
 		vulkan/util/texture.cpp
 		vulkan/util/matrix.cpp
 		vulkan/util/transforms.cpp
+		vulkan/util/gpu_accelerator_impl.cpp
 	)
 
 	list(APPEND HEADERS
@@ -62,6 +63,7 @@ IF(ENABLE_VULKAN)
 		vulkan/util/texture.h
 		vulkan/util/matrix.h
 		vulkan/util/transforms.h
+		vulkan/util/gpu_accelerator_impl.h
 		vulkan/util/uniform_block.h
 
 		vulkan_image_vertex.h

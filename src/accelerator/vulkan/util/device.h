@@ -67,6 +67,11 @@ class device final
     std::vector<vk::CommandBuffer>     allocateCommandBuffers(uint32_t count);
     void                               submit(const vk::SubmitInfo& submitInfo, vk::Fence fence);
     vk::Device                         getVkDevice() const;
+    VkInstance                         getVkInstance() const;
+    VkPhysicalDevice                   getVkPhysicalDevice() const;
+    uint32_t                           getGraphicsQueueFamilyIndex() const;
+    VkQueue                            getGraphicsQueue() const;
+    PFN_vkGetInstanceProcAddr          getInstanceProcAddr() const;
 
     std::shared_ptr<class texture>
     create_attachment(int width, int height, common::bit_depth depth, uint32_t components_count);

@@ -26,6 +26,7 @@
 #include <common/memory.h>
 
 #include <core/frame/frame.h>
+#include <core/frame/gpu_accelerator.h>
 #include <core/frame/pixel_format.h>
 #include <core/mixer/image/image_mixer.h>
 #include <core/video_format.h>
@@ -61,6 +62,8 @@ class image_mixer final : public core::image_mixer
     void              visit(const core::const_frame& frame) override;
     void              pop() override;
     common::bit_depth depth() const override;
+
+    core::gpu_accelerator* get_gpu_accelerator() override;
 
   private:
     struct impl;
