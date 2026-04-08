@@ -40,6 +40,11 @@ struct texture::impl
     common::bit_depth depth_;
     bool              owns_image_ = true;
 
+    // Only populated for wrap_external textures.
+    bool                  has_external_sync_ = false;
+    external_sync         external_sync_{};
+    std::shared_ptr<void> external_lifetime_;
+
     impl(const impl&)            = delete;
     impl& operator=(const impl&) = delete;
 
@@ -106,6 +111,13 @@ void              texture::set_depth(common::bit_depth depth) { impl_->depth_ = 
 int               texture::size() const { return impl_->size_; }
 VkImage           texture::id() const { return impl_->image_; }
 
+const external_sync* texture::external_sync_info() const
+{
+    return impl_->has_external_sync_ ? &impl_->external_sync_ : nullptr;
+}
+
+const std::shared_ptr<void>& texture::external_lifetime() const { return impl_->external_lifetime_; }
+
 std::shared_ptr<texture> texture::wrap_external(vk::Device           device,
                                                 vk::Image            image,
                                                 int                  width,
@@ -129,6 +141,24 @@ std::shared_ptr<texture> texture::wrap_external(vk::Device           device,
 
     auto tex            = std::make_shared<texture>(width, height, stride, depth, image, vk::DeviceMemory{}, image_view, device);
     tex->impl_->owns_image_ = false;
+    return tex;
+}
+
+std::shared_ptr<texture> texture::wrap_external(vk::Device            device,
+                                                vk::Image             image,
+                                                int                   width,
+                                                int                   height,
+                                                int                   stride,
+                                                vk::Format            format,
+                                                common::bit_depth     depth,
+                                                external_sync         sync,
+                                                std::shared_ptr<void> lifetime_token)
+{
+    auto tex = wrap_external(device, image, width, height, stride, format, depth, sync.aspect);
+
+    tex->impl_->has_external_sync_ = true;
+    tex->impl_->external_sync_     = std::move(sync);
+    tex->impl_->external_lifetime_ = std::move(lifetime_token);
     return tex;
 }
 

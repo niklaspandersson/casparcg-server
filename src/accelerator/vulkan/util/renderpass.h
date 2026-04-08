@@ -29,11 +29,21 @@
 #include <vulkan/vulkan.hpp>
 
 #include "draw_params.h"
+#include "texture.h"
 #include "uniform_block.h"
 
 namespace caspar { namespace accelerator { namespace vulkan {
 
 using draw_data = std::pair<std::vector<core::frame_geometry::coord>, uniform_block>;
+
+// One per externally-imported plane referenced by a frame. Owned by the
+// frame_context for the lifetime of the in-flight command buffer.
+struct external_use
+{
+    vk::Image     image;
+    external_sync sync;
+};
+
 struct frame_context
 {
     virtual vk::Buffer                      upload_vertex_data(const std::vector<float>& data) = 0;
@@ -42,7 +52,12 @@ struct frame_context
     virtual vk::CommandBuffer               get_command_buffer()                               = 0;
     virtual void                            submit()                                           = 0;
     virtual std::shared_ptr<class texture>
-    create_attachment(uint32_t width, uint32_t height, uint32_t components_count) = 0;
+                     create_attachment(uint32_t width, uint32_t height, uint32_t components_count)              = 0;
+    virtual void     register_external(const external_use& use, std::shared_ptr<void> lifetime_token) = 0;
+    // List of externals registered so far for the current frame, exposed so
+    // renderpass::commit can emit acquire/release barriers in cmd_buffer.
+    virtual const std::vector<external_use>& registered_externals() const = 0;
+    virtual uint32_t                         graphics_queue_family() const = 0;
 };
 
 class renderpass

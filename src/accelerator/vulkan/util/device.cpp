@@ -131,11 +131,11 @@ struct device::impl : public std::enable_shared_from_this<impl>
     vk::PhysicalDevice                 _physical_device;
     vk::Device                         _device;
     vk::Queue                          _queue;
-    // Protects all submissions to _queue. VkQueue is externally synchronized in Vulkan,
-    // so every vkQueueSubmit on the same queue object must be serialized — including
-    // submissions made by FFmpeg's Vulkan hwcontext from its decode thread, which
-    // synchronizes via the lock_queue / unlock_queue callbacks we install.
+    // Only used in the single-graphics-queue fallback. When the GPU exposes
+    // ≥ 2 graphics queues we hand FFmpeg index 0 and use index 1 ourselves,
+    // so the two queues are distinct VkQueue objects and no locking is needed.
     std::mutex               _queue_mutex;
+    bool                     _shared_with_ffmpeg        = false;
     uint32_t                 _queue_family_index        = 0;
     int                      _decode_queue_family_index = -1;
     vk::CommandPool          _command_pool;
@@ -248,17 +248,23 @@ struct device::impl : public std::enable_shared_from_this<impl>
             }
         }
 
-        // Request a decode queue if the device supports it
-        if (_decode_queue_family_index >= 0) {
-            float                                    priority = 1.0f;
-            std::vector<vkb::CustomQueueDescription> queue_descs;
-            queue_descs.push_back(vkb::CustomQueueDescription(graphics_queue_family, {priority}));
-            if (static_cast<uint32_t>(_decode_queue_family_index) != graphics_queue_family) {
-                queue_descs.push_back(
-                    vkb::CustomQueueDescription(static_cast<uint32_t>(_decode_queue_family_index), {priority}));
-            }
-            device_builder.custom_queue_setup(std::move(queue_descs));
+        // Request two graphics queues whenever the GPU exposes them: index 0
+        // for FFmpeg (or any other external producer) and index 1 for our
+        // render thread. This avoids serializing FFmpeg's decode-thread
+        // submissions against ours via a mutex. If only one queue is exposed
+        // we fall back to sharing it with the lock_queue/unlock_queue mutex.
+        const uint32_t graphics_queue_count = std::min<uint32_t>(2, queue_families[graphics_queue_family].queueCount);
+        _shared_with_ffmpeg                 = (graphics_queue_count < 2);
+
+        std::vector<vkb::CustomQueueDescription> queue_descs;
+        std::vector<float>                       gfx_priorities(graphics_queue_count, 1.0f);
+        queue_descs.push_back(vkb::CustomQueueDescription(graphics_queue_family, gfx_priorities));
+        if (_decode_queue_family_index >= 0 &&
+            static_cast<uint32_t>(_decode_queue_family_index) != graphics_queue_family) {
+            queue_descs.push_back(
+                vkb::CustomQueueDescription(static_cast<uint32_t>(_decode_queue_family_index), {1.0f}));
         }
+        device_builder.custom_queue_setup(std::move(queue_descs));
 
         auto device_res = device_builder.build();
         if (!device_res) {
@@ -269,10 +275,13 @@ struct device::impl : public std::enable_shared_from_this<impl>
         _device                    = vk::Device(vkb_device.device);
         _enabled_device_extensions = _vkb_physical_device.get_extensions();
         VULKAN_HPP_DEFAULT_DISPATCHER.init(_device);
-
-        _queue              = _device.getQueue(graphics_queue_family, 0);
-        _queue_family_index = graphics_queue_family;
-        auto queue_family   = _queue_family_index;
+        // Use queue index 1 when available (queue 0 is reserved for FFmpeg /
+        // other external producers); otherwise share queue 0 and serialize via
+        // _queue_mutex (see _shared_with_ffmpeg above).
+        const uint32_t our_queue_index = _shared_with_ffmpeg ? 0u : 1u;
+        _queue                         = _device.getQueue(graphics_queue_family, our_queue_index);
+        _queue_family_index            = graphics_queue_family;
+        auto queue_family              = _queue_family_index;
 
         vk::CommandPoolCreateInfo pool_info;
         pool_info.flags            = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
@@ -423,8 +432,10 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
         vk::SubmitInfo submitInfo{};
         submitInfo.setCommandBuffers(cmd_buffer);
-        {
+        if (_shared_with_ffmpeg) {
             std::lock_guard<std::mutex> lock(_queue_mutex);
+            _queue.submit(submitInfo, fence);
+        } else {
             _queue.submit(submitInfo, fence);
         }
 
@@ -442,12 +453,28 @@ struct device::impl : public std::enable_shared_from_this<impl>
     }
     void submit(const vk::SubmitInfo& submitInfo, vk::Fence fence)
     {
-        std::lock_guard<std::mutex> lock(_queue_mutex);
-        _queue.submit(submitInfo, fence);
+        if (_shared_with_ffmpeg) {
+            std::lock_guard<std::mutex> lock(_queue_mutex);
+            _queue.submit(submitInfo, fence);
+        } else {
+            _queue.submit(submitInfo, fence);
+        }
     }
 
-    void lock_queue() { _queue_mutex.lock(); }
-    void unlock_queue() { _queue_mutex.unlock(); }
+    // No-ops in the normal (separate-queue) path; only the fallback engages
+    // the mutex. FFmpeg installs the lock_queue/unlock_queue callbacks
+    // unconditionally so we keep the methods callable in both modes.
+    void lock_queue()
+    {
+        if (_shared_with_ffmpeg)
+            _queue_mutex.lock();
+    }
+    void unlock_queue()
+    {
+        if (_shared_with_ffmpeg)
+            _queue_mutex.unlock();
+    }
+    bool shared_with_ffmpeg() const { return _shared_with_ffmpeg; }
 
     std::shared_ptr<texture>
     create_attachment(int width, int height, common::bit_depth depth, uint32_t components_count)
@@ -839,6 +866,7 @@ std::vector<vk::CommandBuffer>     device::allocateCommandBuffers(uint32_t count
 void             device::submit(const vk::SubmitInfo& submitInfo, vk::Fence fence) { impl_->submit(submitInfo, fence); }
 void             device::lock_queue() { impl_->lock_queue(); }
 void             device::unlock_queue() { impl_->unlock_queue(); }
+bool             device::shared_with_ffmpeg() const { return impl_->shared_with_ffmpeg(); }
 vk::Device       device::getVkDevice() const { return impl_->_device; }
 VkInstance       device::getVkInstance() const { return static_cast<VkInstance>(impl_->_vkb_instance.instance); }
 VkPhysicalDevice device::getVkPhysicalDevice() const { return static_cast<VkPhysicalDevice>(impl_->_physical_device); }

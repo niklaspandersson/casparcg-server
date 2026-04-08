@@ -69,10 +69,16 @@ class device final
     std::vector<vk::CommandBuffer>     allocateCommandBuffers(uint32_t count);
     void                               submit(const vk::SubmitInfo& submitInfo, vk::Fence fence);
     // Manual lock/unlock for the graphics queue mutex. Used by FFmpeg's
-    // lock_queue/unlock_queue callbacks so that the decode thread serializes
-    // its vkQueueSubmit calls against ours.
+    // lock_queue/unlock_queue callbacks in the single-queue fallback so that
+    // the decode thread serializes its vkQueueSubmit calls against ours. In
+    // the normal (≥ 2 graphics queues) path these are no-ops because we use
+    // a different VkQueue object than the one FFmpeg sees.
     void                               lock_queue();
     void                               unlock_queue();
+    // True only when this device fell back to sharing the render queue with
+    // FFmpeg. The producer side uses this to decide whether to install the
+    // lock_queue/unlock_queue callbacks at all.
+    bool                               shared_with_ffmpeg() const;
     vk::Device                         getVkDevice() const;
     VkInstance                         getVkInstance() const;
     VkPhysicalDevice                   getVkPhysicalDevice() const;

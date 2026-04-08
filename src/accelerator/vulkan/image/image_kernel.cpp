@@ -95,6 +95,14 @@ struct image_kernel::impl
         vk::CommandBuffer cmd_buffer = nullptr;
         vk::Fence         fence      = nullptr;
 
+        // Externally-imported images consumed by the current frame, and the
+        // lifetime tokens that pin those images alive until the GPU is done.
+        std::vector<external_use>          externals;
+        std::vector<std::shared_ptr<void>> lifetime_tokens;
+        // Track unique image handles so we don't issue duplicate barriers when
+        // multiple planes alias the same multiplanar VkImage.
+        std::vector<vk::Image> seen_external_images;
+
         explicit frame_data(image_kernel::impl* parent)
             : parent(parent)
         {
@@ -109,16 +117,78 @@ struct image_kernel::impl
         virtual vk::CommandBuffer               get_command_buffer() { return cmd_buffer; }
         virtual void                            submit()
         {
-            fence = parent->vulkan_->getVkDevice().createFence({});
+            // Build wait/signal arrays from registered externals. Empty arrays
+            // are legal and reduce to today's behavior (plain submit).
+            std::vector<vk::Semaphore>          waits;
+            std::vector<vk::Semaphore>          signals;
+            std::vector<vk::PipelineStageFlags> wait_stages;
+            std::vector<uint64_t>               wait_vals;
+            std::vector<uint64_t>               signal_vals;
+
+            for (auto& e : externals) {
+                if (e.sync.wait_semaphore) {
+                    waits.push_back(e.sync.wait_semaphore);
+                    wait_vals.push_back(e.sync.wait_value);
+                    wait_stages.push_back(vk::PipelineStageFlagBits::eFragmentShader);
+                }
+                if (e.sync.signal_semaphore) {
+                    signals.push_back(e.sync.signal_semaphore);
+                    signal_vals.push_back(e.sync.signal_value);
+                }
+            }
+
+            vk::TimelineSemaphoreSubmitInfo tsi{};
+            tsi.setWaitSemaphoreValues(wait_vals);
+            tsi.setSignalSemaphoreValues(signal_vals);
+
             vk::SubmitInfo submitInfo{};
+            if (!wait_vals.empty() || !signal_vals.empty()) {
+                submitInfo.pNext = &tsi;
+            }
             submitInfo.setCommandBuffers(cmd_buffer);
+            submitInfo.setWaitSemaphores(waits);
+            submitInfo.setWaitDstStageMask(wait_stages);
+            submitInfo.setSignalSemaphores(signals);
+
+            fence = parent->vulkan_->getVkDevice().createFence({});
             parent->vulkan_->submit(submitInfo, fence);
+
+            // Synchronous writebacks: producer's next frame must see the new
+            // state (e.g. AVVkFrame::sem_value bumped) as soon as we've recorded
+            // the submit. The release fence inside the closure provides the
+            // happens-before for any other thread reading the producer's state.
+            const auto graphics_qfi = parent->vulkan_->getGraphicsQueueFamilyIndex();
+            for (auto& e : externals) {
+                if (e.sync.writeback) {
+                    e.sync.writeback(static_cast<uint32_t>(e.sync.target_layout),
+                                     graphics_qfi,
+                                     e.sync.signal_value,
+                                     static_cast<uint64_t>(vk::AccessFlagBits2::eShaderSampledRead));
+                }
+            }
         }
         virtual std::shared_ptr<class texture>
         create_attachment(uint32_t width, uint32_t height, uint32_t components_count)
         {
             return parent->vulkan_->create_attachment(width, height, parent->depth_, components_count);
         }
+
+        virtual void register_external(const external_use& use, std::shared_ptr<void> lifetime_token)
+        {
+            // Skip duplicate VkImage handles (multiplanar single-image NV12 etc).
+            for (auto& img : seen_external_images) {
+                if (img == use.image)
+                    return;
+            }
+            seen_external_images.push_back(use.image);
+            externals.push_back(use);
+            if (lifetime_token) {
+                lifetime_tokens.push_back(std::move(lifetime_token));
+            }
+        }
+
+        virtual const std::vector<external_use>& registered_externals() const { return externals; }
+        virtual uint32_t graphics_queue_family() const { return parent->vulkan_->getGraphicsQueueFamilyIndex(); }
     };
 
     frame_data frames_[frame_buffer_size];
@@ -163,6 +233,14 @@ struct image_kernel::impl
             device.destroyFence(ctx.fence);
             ctx.fence = nullptr;
         }
+
+        // The fence is signaled, so the GPU is finished with anything the
+        // previous occupant of this slot referenced. It is now safe to drop
+        // its lifetime tokens (releasing any external producer's frame back
+        // into its pool) and clear the per-frame externals list.
+        ctx.lifetime_tokens.clear();
+        ctx.externals.clear();
+        ctx.seen_external_images.clear();
 
         ctx.cmd_buffer.reset({});
         return spl::make_shared<renderpass>(&ctx, width, height);

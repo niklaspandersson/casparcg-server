@@ -69,6 +69,7 @@ int gpu_accelerator_impl::vk_decode_queue_family_index() const
     return vulkan_->getDecodeQueueFamilyIndex();
 }
 
+bool gpu_accelerator_impl::vk_shared_queue_with_ffmpeg() const { return vulkan_->shared_with_ffmpeg(); }
 void gpu_accelerator_impl::vk_lock_queue() { vulkan_->lock_queue(); }
 void gpu_accelerator_impl::vk_unlock_queue() { vulkan_->unlock_queue(); }
 
@@ -90,10 +91,28 @@ core::mutable_frame gpu_accelerator_impl::import_gpu_images(const void*         
         auto stride = desc.planes.at(i).stride;
         auto depth  = desc.planes.at(i).depth;
 
-        auto aspect = plane.vk_aspect != 0
+        external_sync sync;
+        sync.aspect = plane.vk_aspect != 0
                           ? static_cast<vk::ImageAspectFlags>(static_cast<VkImageAspectFlags>(plane.vk_aspect))
                           : vk::ImageAspectFlags(vk::ImageAspectFlagBits::eColor);
+        sync.current_layout   = static_cast<vk::ImageLayout>(plane.current_layout);
+        sync.target_layout    = plane.target_layout != 0
+                                    ? static_cast<vk::ImageLayout>(plane.target_layout)
+                                    : vk::ImageLayout::eShaderReadOnlyOptimal;
+        sync.src_queue_family = plane.src_queue_family;
+        sync.src_access       = static_cast<vk::AccessFlags2>(plane.src_access_mask);
+        sync.src_stage        = plane.src_stage_mask != 0
+                                    ? static_cast<vk::PipelineStageFlags2>(plane.src_stage_mask)
+                                    : vk::PipelineStageFlags2(vk::PipelineStageFlagBits2::eTopOfPipe);
+        sync.wait_semaphore   = static_cast<VkSemaphore>(plane.wait_semaphore);
+        sync.wait_value       = plane.wait_value;
+        sync.signal_semaphore = static_cast<VkSemaphore>(plane.signal_semaphore);
+        sync.signal_value     = plane.signal_value;
+        sync.writeback        = plane.writeback;
 
+        // The lifetime token must travel with the texture so that frame_data can
+        // hold it until the GPU is actually finished with the image. Releasing it
+        // at commit time would let the producer recycle the VkImage too early.
         auto tex = texture::wrap_external(vk_device,
                                           static_cast<vk::Image>(static_cast<VkImage>(plane.vk_image)),
                                           static_cast<int>(plane.width),
@@ -101,7 +120,8 @@ core::mutable_frame gpu_accelerator_impl::import_gpu_images(const void*         
                                           stride,
                                           static_cast<vk::Format>(plane.vk_format),
                                           depth,
-                                          aspect);
+                                          std::move(sync),
+                                          lifetime_token);
 
         // Create an already-resolved shared_future
         std::promise<std::shared_ptr<texture>> promise;
@@ -109,11 +129,9 @@ core::mutable_frame gpu_accelerator_impl::import_gpu_images(const void*         
         textures->emplace_back(promise.get_future().share());
     }
 
-    // Capture textures and lifetime_token in the commit callback.
-    // The lifetime_token prevents the source GPU surfaces from being
-    // recycled by the producer's decode framework until the mixer is done.
-    auto commit = [textures, lifetime_token = std::move(lifetime_token)](
-                      std::vector<array<const std::uint8_t>>) -> std::any { return textures; };
+    // The lifetime token is now carried on each texture (see external_lifetime()),
+    // so the commit callback only needs to keep the futures alive.
+    auto commit = [textures](std::vector<array<const std::uint8_t>>) -> std::any { return textures; };
 
     return core::mutable_frame(tag, std::vector<array<std::uint8_t>>{}, std::move(audio_data), desc, std::move(commit));
 }

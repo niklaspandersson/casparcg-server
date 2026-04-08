@@ -196,6 +196,15 @@ core::draw_frame make_hw_frame(void*                            tag,
                             << ", got " << per_plane.size() << ")";
     }
 
+    // Keep the AVFrame alive until the mixer is done with its VkImages. The
+    // mixer holds this token via the per-texture external_lifetime() until the
+    // GPU fence signals, so the producer's frame pool can't recycle the
+    // VkImages out from under us.
+    auto lifetime = std::shared_ptr<void>(av_frame_clone(video.get()), [](void* p) {
+        auto* f = static_cast<AVFrame*>(p);
+        av_frame_free(&f);
+    });
+
     for (int i = 0; i < num_planes; ++i) {
         core::gpu_image_desc plane_desc{};
 
@@ -208,6 +217,54 @@ core::draw_frame make_hw_frame(void*                            tag,
             plane_desc.vk_image  = vk_frame->img[i];
             plane_desc.vk_format = static_cast<uint32_t>(vk_frames->format[i]);
             plane_desc.vk_aspect = static_cast<uint32_t>(VK_IMAGE_ASPECT_COLOR_BIT);
+        }
+
+        // --- sync metadata pulled from AVVkFrame ---
+        plane_desc.current_layout   = static_cast<uint32_t>(vk_frame->layout[i]);
+        plane_desc.target_layout    = static_cast<uint32_t>(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        plane_desc.src_queue_family = vk_frame->queue_family[i];
+        plane_desc.src_access_mask  = static_cast<uint64_t>(vk_frame->access[i]);
+        // FFmpeg does not publish a precise pipeline stage; ALL_COMMANDS is a
+        // safe (if pessimistic) source stage for the acquire barrier.
+        plane_desc.src_stage_mask   = static_cast<uint64_t>(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+        plane_desc.wait_semaphore   = vk_frame->sem[i];
+        plane_desc.wait_value       = vk_frame->sem_value[i];
+        plane_desc.signal_semaphore = vk_frame->sem[i];
+        plane_desc.signal_value     = vk_frame->sem_value[i] + 1;
+
+        // The mixer dedupes external barriers by VkImage, so when several
+        // planes alias the same multiplanar image only the first writeback
+        // runs. Have it update every plane index that points at this VkImage
+        // so AVVkFrame's per-plane bookkeeping stays consistent.
+        std::vector<int> writeback_indices;
+        if (multiplanar_single_img) {
+            if (i == 0) {
+                writeback_indices.reserve(num_planes);
+                for (int j = 0; j < num_planes; ++j)
+                    writeback_indices.push_back(j);
+            }
+        } else {
+            writeback_indices.push_back(i);
+        }
+
+        if (!writeback_indices.empty()) {
+            plane_desc.writeback = [lifetime, indices = std::move(writeback_indices)](
+                                       uint32_t new_layout,
+                                       uint32_t new_queue_family,
+                                       uint64_t new_sem_value,
+                                       uint64_t new_access) {
+                auto* f   = static_cast<AVFrame*>(lifetime.get());
+                auto* vkf = reinterpret_cast<AVVkFrame*>(f->data[0]);
+                for (int idx : indices) {
+                    vkf->layout[idx]       = static_cast<VkImageLayout>(new_layout);
+                    vkf->queue_family[idx] = new_queue_family;
+                    vkf->sem_value[idx]    = new_sem_value;
+                    vkf->access[idx]       = static_cast<VkAccessFlagBits>(new_access);
+                }
+                // Cheap insurance: publish the writes before any thread that
+                // might be polling AVVkFrame state from elsewhere reads them.
+                std::atomic_thread_fence(std::memory_order_release);
+            };
         }
 
         if (i == 0) {
@@ -267,12 +324,6 @@ core::draw_frame make_hw_frame(void*                            tag,
             }
         }
     }
-
-    // Keep the AVFrame alive until the mixer is done with its VkImages
-    auto lifetime = std::shared_ptr<void>(av_frame_clone(video.get()), [](void* p) {
-        auto* f = static_cast<AVFrame*>(p);
-        av_frame_free(&f);
-    });
 
     auto mf = gpu.import_gpu_images(tag, gpu_planes, desc, std::move(audio_data), std::move(lifetime));
     if (scale_mode != core::frame_geometry::scale_mode::stretch) {
@@ -501,15 +552,18 @@ class Decoder
                             vulkan_ctx->queue_family_decode_index = decode_qfi;
                             vulkan_ctx->nb_decode_queues          = decode_qfi >= 0 ? 1 : 0;
 
-                            // Serialize all FFmpeg vkQueueSubmit calls against ours.
-                            // VkQueue is externally synchronized in Vulkan; without this
-                            // hook the decode thread races our render thread on the
-                            // shared graphics queue.
-                            auto* lock_ctx        = new vk_queue_lock_ctx{gpu, qfi};
-                            device_ctx->user_opaque = lock_ctx;
-                            device_ctx->free        = &vk_queue_lock_ctx_free;
-                            vulkan_ctx->lock_queue   = &vk_lock_queue_cb;
-                            vulkan_ctx->unlock_queue = &vk_unlock_queue_cb;
+                            // Only install the queue-locking callbacks when the
+                            // accelerator is actually sharing its render queue with us.
+                            // In the normal path FFmpeg gets queue index 0 of the
+                            // graphics family and we use index 1, so the two are
+                            // distinct VkQueue objects and no locking is needed.
+                            if (gpu->vk_shared_queue_with_ffmpeg()) {
+                                auto* lock_ctx           = new vk_queue_lock_ctx{gpu, qfi};
+                                device_ctx->user_opaque  = lock_ctx;
+                                device_ctx->free         = &vk_queue_lock_ctx_free;
+                                vulkan_ctx->lock_queue   = &vk_lock_queue_cb;
+                                vulkan_ctx->unlock_queue = &vk_unlock_queue_cb;
+                            }
 
                             auto ret = av_hwdevice_ctx_init(device_ref);
                             if (ret >= 0) {

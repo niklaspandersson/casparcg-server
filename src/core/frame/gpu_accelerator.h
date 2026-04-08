@@ -24,6 +24,7 @@
 #include <common/array.h>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -32,11 +33,41 @@ namespace caspar { namespace core {
 
 struct gpu_image_desc
 {
+    // --- image identity ---
     void*    vk_image;  // VkImage
     uint32_t width;
     uint32_t height;
     uint32_t vk_format; // VkFormat
     uint32_t vk_aspect; // VkImageAspectFlags (0 -> default to COLOR)
+
+    // --- current state on hand-off (filled in by external producers) ---
+    // current_layout == 0 (VK_IMAGE_LAYOUT_UNDEFINED) means "discard, don't care".
+    uint32_t current_layout   = 0;  // VkImageLayout
+    // VK_QUEUE_FAMILY_IGNORED (~0u) for CONCURRENT-shared images.
+    uint32_t src_queue_family = ~0u;
+    uint64_t src_access_mask  = 0;  // VkAccessFlags2
+    uint64_t src_stage_mask   = 0;  // VkPipelineStageFlags2
+
+    // --- target state the mixer transitions to before sampling ---
+    // Defaults to 0 (UNDEFINED); the mixer treats 0 as "leave alone".
+    uint32_t target_layout    = 0;  // VkImageLayout
+
+    // --- timeline semaphore sync (optional) ---
+    // wait_semaphore == nullptr ⇒ no wait/signal emitted.
+    void*    wait_semaphore   = nullptr; // VkSemaphore (timeline)
+    uint64_t wait_value       = 0;
+    void*    signal_semaphore = nullptr; // usually equal to wait_semaphore
+    uint64_t signal_value     = 0;
+
+    // --- writeback ---
+    // Called synchronously by the mixer at submit-record time so the producer
+    // can update its bookkeeping (e.g. AVVkFrame::layout/queue_family/sem_value/access)
+    // before the next decode reads it. Optional.
+    std::function<void(uint32_t new_layout,
+                       uint32_t new_queue_family,
+                       uint64_t new_sem_value,
+                       uint64_t new_access_mask)>
+        writeback;
 };
 
 class gpu_accelerator
@@ -56,9 +87,15 @@ class gpu_accelerator
     virtual const std::vector<std::string>& vk_enabled_device_extensions() const = 0;
     virtual int    vk_decode_queue_family_index() const = 0; // -1 if not available
 
-    // Manual lock/unlock for the graphics queue. VkQueue is externally synchronized in
-    // Vulkan, so anything submitting to it from outside the accelerator (e.g. FFmpeg's
-    // hwcontext from its decode thread) must call these around its vkQueueSubmit calls.
+    // True only when the accelerator failed to allocate a separate VkQueue for FFmpeg
+    // and is sharing the render queue with it. In that (fallback) case, FFmpeg's
+    // hwcontext must call vk_lock_queue/vk_unlock_queue around its vkQueueSubmit
+    // calls. In the normal case the accelerator hands FFmpeg a queue we never touch
+    // and no locking is required.
+    virtual bool vk_shared_queue_with_ffmpeg() const = 0;
+
+    // Manual lock/unlock for the render queue. Only meaningful when
+    // vk_shared_queue_with_ffmpeg() is true; otherwise these are no-ops.
     virtual void vk_lock_queue()   = 0;
     virtual void vk_unlock_queue() = 0;
 

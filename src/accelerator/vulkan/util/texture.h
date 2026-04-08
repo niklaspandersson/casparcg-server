@@ -23,10 +23,35 @@
 
 #include <common/bit_depth.h>
 #include <core/frame/frame.h>
+#include <functional>
 #include <memory>
 #include <vulkan/vulkan.hpp>
 
 namespace caspar { namespace accelerator { namespace vulkan {
+
+// Sync metadata attached to externally-owned VkImages so the mixer can issue
+// the right acquire/release barriers and timeline-semaphore waits/signals.
+// All fields are optional; null/zero means "skip".
+struct external_sync
+{
+    vk::ImageAspectFlags    aspect          = vk::ImageAspectFlagBits::eColor;
+    vk::ImageLayout         current_layout  = vk::ImageLayout::eUndefined;
+    vk::ImageLayout         target_layout   = vk::ImageLayout::eShaderReadOnlyOptimal;
+    uint32_t                src_queue_family = VK_QUEUE_FAMILY_IGNORED;
+    vk::AccessFlags2        src_access      = {};
+    vk::PipelineStageFlags2 src_stage       = vk::PipelineStageFlagBits2::eTopOfPipe;
+
+    vk::Semaphore wait_semaphore   = nullptr;
+    uint64_t      wait_value       = 0;
+    vk::Semaphore signal_semaphore = nullptr;
+    uint64_t      signal_value     = 0;
+
+    std::function<void(uint32_t new_layout,
+                       uint32_t new_queue_family,
+                       uint64_t new_sem_value,
+                       uint64_t new_access)>
+        writeback;
+};
 
 class texture final
 {
@@ -56,9 +81,15 @@ class texture final
     int               size() const;
     VkImage           id() const;
 
+    // External-sync metadata + lifetime token (only set for textures created via
+    // wrap_external). external_sync_info() returns nullptr for normal textures.
+    const external_sync*         external_sync_info() const;
+    const std::shared_ptr<void>& external_lifetime() const;
+
     // Wrap an externally-owned VkImage. Only the VkImageView is created and destroyed
     // by this texture - the image and its memory are owned by the caller.
-    // The caller must ensure the VkImage outlives this texture.
+    // The caller must ensure the VkImage outlives this texture (the lifetime_token
+    // overload pins it for as long as the texture is alive).
     static std::shared_ptr<texture> wrap_external(vk::Device           device,
                                                   vk::Image            image,
                                                   int                  width,
@@ -67,6 +98,16 @@ class texture final
                                                   vk::Format           format,
                                                   common::bit_depth    depth,
                                                   vk::ImageAspectFlags aspect = vk::ImageAspectFlagBits::eColor);
+
+    static std::shared_ptr<texture> wrap_external(vk::Device            device,
+                                                  vk::Image             image,
+                                                  int                   width,
+                                                  int                   height,
+                                                  int                   stride,
+                                                  vk::Format            format,
+                                                  common::bit_depth     depth,
+                                                  external_sync         sync,
+                                                  std::shared_ptr<void> lifetime_token);
 
   private:
     struct impl;

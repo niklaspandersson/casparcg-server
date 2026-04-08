@@ -25,7 +25,112 @@
 #include "pipeline.h"
 #include "texture.h"
 
+#include <vulkan/vulkan.hpp>
+
 namespace caspar { namespace accelerator { namespace vulkan {
+
+namespace {
+
+// Emit one VkImageMemoryBarrier2 per externally-imported image. Acquire side:
+// transition layout from whatever the producer left it in to SHADER_READ_ONLY,
+// and acquire queue-family ownership if the producer was on a different family.
+void emit_acquire_barriers(vk::CommandBuffer                cmd,
+                           const std::vector<external_use>& externals,
+                           uint32_t                         our_qfi)
+{
+    if (externals.empty())
+        return;
+
+    std::vector<vk::ImageMemoryBarrier2> barriers;
+    barriers.reserve(externals.size());
+
+    for (const auto& e : externals) {
+        vk::ImageMemoryBarrier2 b{};
+        b.image       = e.image;
+        b.oldLayout   = e.sync.current_layout;
+        b.newLayout   = e.sync.target_layout;
+        b.srcAccessMask = e.sync.src_access;
+        b.srcStageMask  = e.sync.src_stage;
+        b.dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead;
+        b.dstStageMask  = vk::PipelineStageFlagBits2::eFragmentShader;
+
+        // UNDEFINED is the "discard, don't care" sentinel — collapse src to a
+        // top-of-pipe no-op so the validator doesn't complain.
+        if (b.oldLayout == vk::ImageLayout::eUndefined) {
+            b.srcAccessMask = {};
+            b.srcStageMask  = vk::PipelineStageFlagBits2::eTopOfPipe;
+        }
+
+        // Queue-family ownership acquire half (only if the producer hasn't
+        // marked the image as CONCURRENT-shared).
+        if (e.sync.src_queue_family != VK_QUEUE_FAMILY_IGNORED &&
+            e.sync.src_queue_family != our_qfi) {
+            b.srcQueueFamilyIndex = e.sync.src_queue_family;
+            b.dstQueueFamilyIndex = our_qfi;
+        } else {
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        }
+
+        // Whole-image aspect: works for both single-plane images and
+        // multiplanar images created without the DISJOINT bit.
+        b.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        b.subresourceRange.levelCount = 1;
+        b.subresourceRange.layerCount = 1;
+
+        barriers.push_back(b);
+    }
+
+    vk::DependencyInfo dep{};
+    dep.setImageMemoryBarriers(barriers);
+    cmd.pipelineBarrier2(dep);
+}
+
+// Release-side: keep the layout the same but release queue-family ownership
+// back to the producer (and publish the read so any cross-family acquire on the
+// other side will see it).
+void emit_release_barriers(vk::CommandBuffer                cmd,
+                           const std::vector<external_use>& externals,
+                           uint32_t                         our_qfi)
+{
+    if (externals.empty())
+        return;
+
+    std::vector<vk::ImageMemoryBarrier2> barriers;
+    barriers.reserve(externals.size());
+
+    for (const auto& e : externals) {
+        vk::ImageMemoryBarrier2 b{};
+        b.image         = e.image;
+        b.oldLayout     = e.sync.target_layout;
+        b.newLayout     = e.sync.target_layout;
+        b.srcAccessMask = vk::AccessFlagBits2::eShaderSampledRead;
+        b.srcStageMask  = vk::PipelineStageFlagBits2::eFragmentShader;
+        b.dstAccessMask = {};
+        b.dstStageMask  = vk::PipelineStageFlagBits2::eNone;
+
+        if (e.sync.src_queue_family != VK_QUEUE_FAMILY_IGNORED &&
+            e.sync.src_queue_family != our_qfi) {
+            b.srcQueueFamilyIndex = our_qfi;
+            b.dstQueueFamilyIndex = e.sync.src_queue_family;
+        } else {
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        }
+
+        b.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        b.subresourceRange.levelCount = 1;
+        b.subresourceRange.layerCount = 1;
+
+        barriers.push_back(b);
+    }
+
+    vk::DependencyInfo dep{};
+    dep.setImageMemoryBarriers(barriers);
+    cmd.pipelineBarrier2(dep);
+}
+
+} // namespace
 
 vk::Buffer renderpass::upload_vertex_buffers()
 {
@@ -87,6 +192,14 @@ void renderpass::draw(const draw_params& params)
 
     for (int n = 0; n < params.textures.size(); ++n) {
         textures[n] = params.textures[n]->view();
+
+        // Pick up any externally-imported planes so the frame_context can issue
+        // the right acquire/release barriers and timeline-semaphore wait/signal
+        // around the cmd buffer.
+        if (auto* sync = params.textures[n]->external_sync_info()) {
+            external_use use{params.textures[n]->id(), *sync};
+            _ctx->register_external(use, params.textures[n]->external_lifetime());
+        }
     }
     if (params.local_key) {
         textures[5] = params.local_key->view();
@@ -111,6 +224,10 @@ void renderpass::commit()
 
     auto cmd_buffer = _ctx->get_command_buffer();
     cmd_buffer.begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+
+    // Acquire externally-imported images: layout transition + (if necessary)
+    // queue-family ownership acquire. Must come before any rendering reads.
+    emit_acquire_barriers(cmd_buffer, _ctx->registered_externals(), _ctx->graphics_queue_family());
 
     vk::ClearValue clearColor{vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f})};
 
@@ -215,6 +332,11 @@ void renderpass::commit()
     }
 
     cmd_buffer.endRendering();
+
+    // Release-side barriers: release queue-family ownership back to the producer
+    // (no-op for CONCURRENT/same-family images).
+    emit_release_barriers(cmd_buffer, _ctx->registered_externals(), _ctx->graphics_queue_family());
+
     cmd_buffer.end();
 
     _ctx->submit();
