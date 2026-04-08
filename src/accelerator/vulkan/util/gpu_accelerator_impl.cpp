@@ -69,6 +69,9 @@ int gpu_accelerator_impl::vk_decode_queue_family_index() const
     return vulkan_->getDecodeQueueFamilyIndex();
 }
 
+void gpu_accelerator_impl::vk_lock_queue() { vulkan_->lock_queue(); }
+void gpu_accelerator_impl::vk_unlock_queue() { vulkan_->unlock_queue(); }
+
 core::mutable_frame gpu_accelerator_impl::import_gpu_images(const void*                              tag,
                                                              const std::vector<core::gpu_image_desc>& planes,
                                                              const core::pixel_format_desc&           desc,
@@ -87,13 +90,18 @@ core::mutable_frame gpu_accelerator_impl::import_gpu_images(const void*         
         auto stride = desc.planes.at(i).stride;
         auto depth  = desc.planes.at(i).depth;
 
+        auto aspect = plane.vk_aspect != 0
+                          ? static_cast<vk::ImageAspectFlags>(static_cast<VkImageAspectFlags>(plane.vk_aspect))
+                          : vk::ImageAspectFlags(vk::ImageAspectFlagBits::eColor);
+
         auto tex = texture::wrap_external(vk_device,
                                           static_cast<vk::Image>(static_cast<VkImage>(plane.vk_image)),
                                           static_cast<int>(plane.width),
                                           static_cast<int>(plane.height),
                                           stride,
                                           static_cast<vk::Format>(plane.vk_format),
-                                          depth);
+                                          depth,
+                                          aspect);
 
         // Create an already-resolved shared_future
         std::promise<std::shared_ptr<texture>> promise;

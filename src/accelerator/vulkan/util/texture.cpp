@@ -106,19 +106,20 @@ void              texture::set_depth(common::bit_depth depth) { impl_->depth_ = 
 int               texture::size() const { return impl_->size_; }
 VkImage           texture::id() const { return impl_->image_; }
 
-std::shared_ptr<texture> texture::wrap_external(vk::Device        device,
-                                                vk::Image         image,
-                                                int               width,
-                                                int               height,
-                                                int               stride,
-                                                vk::Format        format,
-                                                common::bit_depth depth)
+std::shared_ptr<texture> texture::wrap_external(vk::Device           device,
+                                                vk::Image            image,
+                                                int                  width,
+                                                int                  height,
+                                                int                  stride,
+                                                vk::Format           format,
+                                                common::bit_depth    depth,
+                                                vk::ImageAspectFlags aspect)
 {
     vk::ImageViewCreateInfo view_info;
     view_info.image                           = image;
     view_info.viewType                        = vk::ImageViewType::e2D;
     view_info.format                          = format;
-    view_info.subresourceRange.aspectMask     = vk::ImageAspectFlagBits::eColor;
+    view_info.subresourceRange.aspectMask     = aspect;
     view_info.subresourceRange.baseMipLevel   = 0;
     view_info.subresourceRange.levelCount     = 1;
     view_info.subresourceRange.baseArrayLayer = 0;

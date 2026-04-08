@@ -68,6 +68,11 @@ class device final
     vk::PhysicalDeviceMemoryProperties getMemoryProperties();
     std::vector<vk::CommandBuffer>     allocateCommandBuffers(uint32_t count);
     void                               submit(const vk::SubmitInfo& submitInfo, vk::Fence fence);
+    // Manual lock/unlock for the graphics queue mutex. Used by FFmpeg's
+    // lock_queue/unlock_queue callbacks so that the decode thread serializes
+    // its vkQueueSubmit calls against ours.
+    void                               lock_queue();
+    void                               unlock_queue();
     vk::Device                         getVkDevice() const;
     VkInstance                         getVkInstance() const;
     VkPhysicalDevice                   getVkPhysicalDevice() const;

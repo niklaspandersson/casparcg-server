@@ -44,6 +44,9 @@ class gpu_accelerator_impl final : public core::gpu_accelerator
     const std::vector<std::string>& vk_enabled_device_extensions() const override;
     int    vk_decode_queue_family_index() const override;
 
+    void vk_lock_queue() override;
+    void vk_unlock_queue() override;
+
     core::mutable_frame import_gpu_images(const void*                              tag,
                                           const std::vector<core::gpu_image_desc>& planes,
                                           const core::pixel_format_desc&           desc,

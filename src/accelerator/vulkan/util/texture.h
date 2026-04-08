@@ -59,13 +59,14 @@ class texture final
     // Wrap an externally-owned VkImage. Only the VkImageView is created and destroyed
     // by this texture - the image and its memory are owned by the caller.
     // The caller must ensure the VkImage outlives this texture.
-    static std::shared_ptr<texture> wrap_external(vk::Device        device,
-                                                  vk::Image         image,
-                                                  int               width,
-                                                  int               height,
-                                                  int               stride,
-                                                  vk::Format        format,
-                                                  common::bit_depth depth);
+    static std::shared_ptr<texture> wrap_external(vk::Device           device,
+                                                  vk::Image            image,
+                                                  int                  width,
+                                                  int                  height,
+                                                  int                  stride,
+                                                  vk::Format           format,
+                                                  common::bit_depth    depth,
+                                                  vk::ImageAspectFlags aspect = vk::ImageAspectFlagBits::eColor);
 
   private:
     struct impl;

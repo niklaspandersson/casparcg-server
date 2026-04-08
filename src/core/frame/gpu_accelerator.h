@@ -36,6 +36,7 @@ struct gpu_image_desc
     uint32_t width;
     uint32_t height;
     uint32_t vk_format; // VkFormat
+    uint32_t vk_aspect; // VkImageAspectFlags (0 -> default to COLOR)
 };
 
 class gpu_accelerator
@@ -54,6 +55,12 @@ class gpu_accelerator
     virtual void*    vk_get_instance_proc_addr() const          = 0; // PFN_vkGetInstanceProcAddr
     virtual const std::vector<std::string>& vk_enabled_device_extensions() const = 0;
     virtual int    vk_decode_queue_family_index() const = 0; // -1 if not available
+
+    // Manual lock/unlock for the graphics queue. VkQueue is externally synchronized in
+    // Vulkan, so anything submitting to it from outside the accelerator (e.g. FFmpeg's
+    // hwcontext from its decode thread) must call these around its vkQueueSubmit calls.
+    virtual void vk_lock_queue()   = 0;
+    virtual void vk_unlock_queue() = 0;
 
     // --- VkImage import ---
     // Import externally-owned VkImages (e.g. from hw decode) as a frame.

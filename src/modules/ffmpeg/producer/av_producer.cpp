@@ -141,9 +141,9 @@ core::draw_frame make_hw_frame(void*                            tag,
     auto* vk_frame = reinterpret_cast<AVVkFrame*>(video->data[0]);
 
     // Determine pixel format from the sw_format of the hw frames context
-    auto* hw_ctx      = reinterpret_cast<AVHWFramesContext*>(video->hw_frames_ctx->data);
-    auto* vk_frames   = static_cast<AVVulkanFramesContext*>(hw_ctx->hwctx);
-    auto  sw_fmt      = hw_ctx->sw_format;
+    auto* hw_ctx    = reinterpret_cast<AVHWFramesContext*>(video->hw_frames_ctx->data);
+    auto* vk_frames = static_cast<AVVulkanFramesContext*>(hw_ctx->hwctx);
+    auto  sw_fmt    = hw_ctx->sw_format;
 
     auto [pix_fmt, depth] = get_pixel_format(sw_fmt);
     auto desc             = core::pixel_format_desc(pix_fmt, color_space);
@@ -153,31 +153,78 @@ core::draw_frame make_hw_frame(void*                            tag,
 
     // NV12/P010: 2 planes - Y (single channel) + UV (two channels interleaved)
     // YUV420P etc: 3 planes
-    const AVPixFmtDescriptor* pix_desc = av_pix_fmt_desc_get(sw_fmt);
-    int num_planes = 0;
+    const AVPixFmtDescriptor* pix_desc   = av_pix_fmt_desc_get(sw_fmt);
+    int                       num_planes = 0;
     for (int i = 0; i < 4 && pix_desc; ++i) {
         if (pix_desc->comp[i].plane >= num_planes)
             num_planes = pix_desc->comp[i].plane + 1;
     }
 
+    // Some pixel formats (e.g. NV12) are stored by FFmpeg's Vulkan hwcontext as a single
+    // multiplanar VkImage with a multiplanar VkFormat such as
+    // VK_FORMAT_G8_B8R8_2PLANE_420_UNORM. Creating an image view on such a format with
+    // SAMPLED usage requires either a VkSamplerYcbcrConversion or per-plane single-plane
+    // views. We pick the per-plane approach: for each plane we report the same VkImage
+    // along with a single-plane VkFormat and the matching VK_IMAGE_ASPECT_PLANE_n_BIT.
+    struct PlaneView
+    {
+        VkFormat            format;
+        VkImageAspectFlags  aspect;
+        int                 stride; // 1 = R, 2 = RG
+    };
+    auto plane_views_for = [](VkFormat fmt) -> std::vector<PlaneView> {
+        switch (fmt) {
+            case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+                return {{VK_FORMAT_R8_UNORM, VK_IMAGE_ASPECT_PLANE_0_BIT, 1},
+                        {VK_FORMAT_R8G8_UNORM, VK_IMAGE_ASPECT_PLANE_1_BIT, 2}};
+            case VK_FORMAT_G16_B16R16_2PLANE_420_UNORM:
+                return {{VK_FORMAT_R16_UNORM, VK_IMAGE_ASPECT_PLANE_0_BIT, 1},
+                        {VK_FORMAT_R16G16_UNORM, VK_IMAGE_ASPECT_PLANE_1_BIT, 2}};
+            case VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16:
+                return {{VK_FORMAT_R10X6_UNORM_PACK16, VK_IMAGE_ASPECT_PLANE_0_BIT, 1},
+                        {VK_FORMAT_R10X6G10X6_UNORM_2PACK16, VK_IMAGE_ASPECT_PLANE_1_BIT, 2}};
+            default:
+                return {};
+        }
+    };
+
+    auto                   per_plane              = plane_views_for(vk_frames->format[0]);
+    const bool             multiplanar_single_img = !per_plane.empty();
+    if (multiplanar_single_img && static_cast<int>(per_plane.size()) != num_planes) {
+        // Sanity check - shouldn't happen for the formats we list above.
+        CASPAR_LOG(warning) << "Vulkan multiplanar format plane count mismatch (expected " << num_planes
+                            << ", got " << per_plane.size() << ")";
+    }
+
     for (int i = 0; i < num_planes; ++i) {
-        core::gpu_image_desc plane_desc;
-        plane_desc.vk_image  = vk_frame->img[i];
-        plane_desc.vk_format = static_cast<uint32_t>(vk_frames->format[i]);
+        core::gpu_image_desc plane_desc{};
+
+        if (multiplanar_single_img) {
+            // All planes share the same VkImage; we differentiate via aspect mask.
+            plane_desc.vk_image  = vk_frame->img[0];
+            plane_desc.vk_format = static_cast<uint32_t>(per_plane[i].format);
+            plane_desc.vk_aspect = static_cast<uint32_t>(per_plane[i].aspect);
+        } else {
+            plane_desc.vk_image  = vk_frame->img[i];
+            plane_desc.vk_format = static_cast<uint32_t>(vk_frames->format[i]);
+            plane_desc.vk_aspect = static_cast<uint32_t>(VK_IMAGE_ASPECT_COLOR_BIT);
+        }
 
         if (i == 0) {
             plane_desc.width  = video->width;
             plane_desc.height = video->height;
         } else {
             // Chroma planes are typically half size for 4:2:0
-            auto chroma_w = AV_CEIL_RSHIFT(video->width, (sw_fmt == AV_PIX_FMT_NV12 || sw_fmt == AV_PIX_FMT_P010LE ||
-                                                           sw_fmt == AV_PIX_FMT_YUV420P || sw_fmt == AV_PIX_FMT_YUV420P10LE)
-                                                              ? 1
-                                                              : 0);
-            auto chroma_h = AV_CEIL_RSHIFT(video->height, (sw_fmt == AV_PIX_FMT_NV12 || sw_fmt == AV_PIX_FMT_P010LE ||
-                                                            sw_fmt == AV_PIX_FMT_YUV420P || sw_fmt == AV_PIX_FMT_YUV420P10LE)
-                                                               ? 1
-                                                               : 0);
+            auto chroma_w     = AV_CEIL_RSHIFT(video->width,
+                                           (sw_fmt == AV_PIX_FMT_NV12 || sw_fmt == AV_PIX_FMT_P010LE ||
+                                            sw_fmt == AV_PIX_FMT_YUV420P || sw_fmt == AV_PIX_FMT_YUV420P10LE)
+                                                   ? 1
+                                                   : 0);
+            auto chroma_h     = AV_CEIL_RSHIFT(video->height,
+                                           (sw_fmt == AV_PIX_FMT_NV12 || sw_fmt == AV_PIX_FMT_P010LE ||
+                                            sw_fmt == AV_PIX_FMT_YUV420P || sw_fmt == AV_PIX_FMT_YUV420P10LE)
+                                                   ? 1
+                                                   : 0);
             plane_desc.width  = chroma_w;
             plane_desc.height = chroma_h;
         }
@@ -185,9 +232,13 @@ core::draw_frame make_hw_frame(void*                            tag,
         gpu_planes.push_back(plane_desc);
 
         // Build matching pixel_format_desc plane
-        int stride = (i == 0) ? 1 : ((sw_fmt == AV_PIX_FMT_NV12 || sw_fmt == AV_PIX_FMT_P010LE) ? 2 : 1);
-        desc.planes.push_back(
-            core::pixel_format_desc::plane(plane_desc.width, plane_desc.height, stride, depth));
+        int stride;
+        if (multiplanar_single_img) {
+            stride = per_plane[i].stride;
+        } else {
+            stride = (i == 0) ? 1 : ((sw_fmt == AV_PIX_FMT_NV12 || sw_fmt == AV_PIX_FMT_P010LE) ? 2 : 1);
+        }
+        desc.planes.push_back(core::pixel_format_desc::plane(plane_desc.width, plane_desc.height, stride, depth));
     }
 
     // Prepare audio data
@@ -218,11 +269,10 @@ core::draw_frame make_hw_frame(void*                            tag,
     }
 
     // Keep the AVFrame alive until the mixer is done with its VkImages
-    auto lifetime = std::shared_ptr<void>(
-        av_frame_clone(video.get()), [](void* p) {
-            auto* f = static_cast<AVFrame*>(p);
-            av_frame_free(&f);
-        });
+    auto lifetime = std::shared_ptr<void>(av_frame_clone(video.get()), [](void* p) {
+        auto* f = static_cast<AVFrame*>(p);
+        av_frame_free(&f);
+    });
 
     auto mf = gpu.import_gpu_images(tag, gpu_planes, desc, std::move(audio_data), std::move(lifetime));
     if (scale_mode != core::frame_geometry::scale_mode::stretch) {
@@ -253,23 +303,78 @@ class Decoder
 
     boost::thread thread;
 
-    AVBufferRef* hw_device_ctx_ = nullptr;
+    AVBufferRef*             hw_device_ctx_ = nullptr;
     std::vector<const char*> hw_dev_ext_ptrs_; // must outlive hw_device_ctx_
 
 #ifdef ENABLE_VULKAN
-    static AVPixelFormat get_hw_format(AVCodecContext*, const AVPixelFormat* pix_fmts)
+    static AVPixelFormat get_hw_format(AVCodecContext* ctx, const AVPixelFormat* pix_fmts)
     {
         for (auto p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
-            if (*p == AV_PIX_FMT_VULKAN)
-                return *p;
+            if (*p != AV_PIX_FMT_VULKAN)
+                continue;
+
+            // Allocate frames ctx ourselves so we can override usage flags
+            // before init (otherwise FFmpeg adds STORAGE which NV12 doesn't support).
+            if (ctx->hw_frames_ctx) {
+                av_buffer_unref(&ctx->hw_frames_ctx);
+            }
+            if (avcodec_get_hw_frames_parameters(ctx, ctx->hw_device_ctx, AV_PIX_FMT_VULKAN, &ctx->hw_frames_ctx) < 0) {
+                return AV_PIX_FMT_NONE;
+            }
+
+            auto* frames    = reinterpret_cast<AVHWFramesContext*>(ctx->hw_frames_ctx->data);
+            auto* vk_frames = static_cast<AVVulkanFramesContext*>(frames->hwctx);
+
+            // Drop STORAGE — multiplanar YCbCr formats like
+            // VK_FORMAT_G8_B8R8_2PLANE_420_UNORM don't support it.
+            vk_frames->usage = static_cast<VkImageUsageFlagBits>(
+                vk_frames->usage & ~(VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR));
+
+            if (av_hwframe_ctx_init(ctx->hw_frames_ctx) < 0) {
+                av_buffer_unref(&ctx->hw_frames_ctx);
+                return AV_PIX_FMT_NONE;
+            }
+            return *p;
         }
         return AV_PIX_FMT_NONE;
+    }
+
+    // Stashed in AVHWDeviceContext::user_opaque so the lock_queue / unlock_queue
+    // callbacks can find their way back to our gpu_accelerator's queue mutex.
+    struct vk_queue_lock_ctx
+    {
+        core::gpu_accelerator* gpu;
+        uint32_t               graphics_qfi;
+    };
+
+    static void vk_lock_queue_cb(AVHWDeviceContext* ctx, uint32_t queue_family, uint32_t /*index*/)
+    {
+        auto* lock_ctx = static_cast<vk_queue_lock_ctx*>(ctx->user_opaque);
+        // We only share the graphics queue with FFmpeg; the dedicated decode queue
+        // (different family) is FFmpeg's exclusively and needs no locking from us.
+        if (lock_ctx && queue_family == lock_ctx->graphics_qfi) {
+            lock_ctx->gpu->vk_lock_queue();
+        }
+    }
+
+    static void vk_unlock_queue_cb(AVHWDeviceContext* ctx, uint32_t queue_family, uint32_t /*index*/)
+    {
+        auto* lock_ctx = static_cast<vk_queue_lock_ctx*>(ctx->user_opaque);
+        if (lock_ctx && queue_family == lock_ctx->graphics_qfi) {
+            lock_ctx->gpu->vk_unlock_queue();
+        }
+    }
+
+    static void vk_queue_lock_ctx_free(AVHWDeviceContext* ctx)
+    {
+        delete static_cast<vk_queue_lock_ctx*>(ctx->user_opaque);
+        ctx->user_opaque = nullptr;
     }
 #endif
 
   public:
     std::shared_ptr<AVCodecContext> ctx;
-    bool                           hw_decode_active = false;
+    bool                            hw_decode_active = false;
 
     Decoder() = default;
 
@@ -327,9 +432,10 @@ class Decoder
                         // Create AVHWDeviceContext sharing the accelerator's Vulkan device
                         AVBufferRef* device_ref = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_VULKAN);
                         if (device_ref) {
-                            auto* device_ctx     = reinterpret_cast<AVHWDeviceContext*>(device_ref->data);
-                            auto* vulkan_ctx       = static_cast<AVVulkanDeviceContext*>(device_ctx->hwctx);
-                            vulkan_ctx->get_proc_addr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(gpu->vk_get_instance_proc_addr());
+                            auto* device_ctx = reinterpret_cast<AVHWDeviceContext*>(device_ref->data);
+                            auto* vulkan_ctx = static_cast<AVVulkanDeviceContext*>(device_ctx->hwctx);
+                            vulkan_ctx->get_proc_addr =
+                                reinterpret_cast<PFN_vkGetInstanceProcAddr>(gpu->vk_get_instance_proc_addr());
                             vulkan_ctx->inst     = static_cast<VkInstance>(gpu->vk_instance());
                             vulkan_ctx->phys_dev = static_cast<VkPhysicalDevice>(gpu->vk_physical_device());
                             vulkan_ctx->act_dev  = static_cast<VkDevice>(gpu->vk_device());
@@ -343,23 +449,24 @@ class Decoder
                             vulkan_ctx->enabled_dev_extensions    = hw_dev_ext_ptrs_.data();
                             vulkan_ctx->nb_enabled_dev_extensions = static_cast<int>(hw_dev_ext_ptrs_.size());
 
-                            auto qfi = gpu->queue_family_index();
+                            auto qfi        = gpu->queue_family_index();
                             auto decode_qfi = gpu->vk_decode_queue_family_index();
 
                             // New queue family API
-                            int nb_qf = 0;
+                            int nb_qf                   = 0;
                             vulkan_ctx->qf[nb_qf].idx   = static_cast<int>(qfi);
                             vulkan_ctx->qf[nb_qf].num   = 1;
-                            vulkan_ctx->qf[nb_qf].flags = static_cast<VkQueueFlagBits>(VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT);
+                            vulkan_ctx->qf[nb_qf].flags = static_cast<VkQueueFlagBits>(
+                                VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT);
                             nb_qf++;
 
                             if (decode_qfi >= 0) {
                                 // Query supported video codec operations for the decode queue family
                                 VkQueueFamilyVideoPropertiesKHR video_props = {};
-                                video_props.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR;
+                                video_props.sType                 = VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR;
                                 VkQueueFamilyProperties2 qf_props = {};
-                                qf_props.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
-                                qf_props.pNext = &video_props;
+                                qf_props.sType                    = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
+                                qf_props.pNext                    = &video_props;
 
                                 auto get_proc = vulkan_ctx->get_proc_addr;
                                 auto vkGetPhysicalDeviceQueueFamilyProperties2_ =
@@ -368,15 +475,18 @@ class Decoder
 
                                 uint32_t qf_count = 0;
                                 vkGetPhysicalDeviceQueueFamilyProperties2_(vulkan_ctx->phys_dev, &qf_count, nullptr);
-                                std::vector<VkQueueFamilyVideoPropertiesKHR> all_video_props(qf_count, {VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR});
-                                std::vector<VkQueueFamilyProperties2> all_qf_props(qf_count, {VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
+                                std::vector<VkQueueFamilyVideoPropertiesKHR> all_video_props(
+                                    qf_count, {VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR});
+                                std::vector<VkQueueFamilyProperties2> all_qf_props(
+                                    qf_count, {VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
                                 for (uint32_t i = 0; i < qf_count; i++)
                                     all_qf_props[i].pNext = &all_video_props[i];
-                                vkGetPhysicalDeviceQueueFamilyProperties2_(vulkan_ctx->phys_dev, &qf_count, all_qf_props.data());
+                                vkGetPhysicalDeviceQueueFamilyProperties2_(
+                                    vulkan_ctx->phys_dev, &qf_count, all_qf_props.data());
 
-                                vulkan_ctx->qf[nb_qf].idx       = decode_qfi;
-                                vulkan_ctx->qf[nb_qf].num       = 1;
-                                vulkan_ctx->qf[nb_qf].flags     = VK_QUEUE_VIDEO_DECODE_BIT_KHR;
+                                vulkan_ctx->qf[nb_qf].idx        = decode_qfi;
+                                vulkan_ctx->qf[nb_qf].num        = 1;
+                                vulkan_ctx->qf[nb_qf].flags      = VK_QUEUE_VIDEO_DECODE_BIT_KHR;
                                 vulkan_ctx->qf[nb_qf].video_caps = static_cast<VkVideoCodecOperationFlagBitsKHR>(
                                     all_video_props[decode_qfi].videoCodecOperations);
                                 nb_qf++;
@@ -384,12 +494,22 @@ class Decoder
                             vulkan_ctx->nb_qf = nb_qf;
 
                             // Deprecated fields (still required for compatibility)
-                            vulkan_ctx->queue_family_index    = qfi;
-                            vulkan_ctx->queue_family_tx_index = qfi;
-                            vulkan_ctx->nb_graphics_queues    = 1;
-                            vulkan_ctx->nb_tx_queues          = 1;
+                            vulkan_ctx->queue_family_index        = qfi;
+                            vulkan_ctx->queue_family_tx_index     = qfi;
+                            vulkan_ctx->nb_graphics_queues        = 1;
+                            vulkan_ctx->nb_tx_queues              = 1;
                             vulkan_ctx->queue_family_decode_index = decode_qfi;
-                            vulkan_ctx->nb_decode_queues         = decode_qfi >= 0 ? 1 : 0;
+                            vulkan_ctx->nb_decode_queues          = decode_qfi >= 0 ? 1 : 0;
+
+                            // Serialize all FFmpeg vkQueueSubmit calls against ours.
+                            // VkQueue is externally synchronized in Vulkan; without this
+                            // hook the decode thread races our render thread on the
+                            // shared graphics queue.
+                            auto* lock_ctx        = new vk_queue_lock_ctx{gpu, qfi};
+                            device_ctx->user_opaque = lock_ctx;
+                            device_ctx->free        = &vk_queue_lock_ctx_free;
+                            vulkan_ctx->lock_queue   = &vk_lock_queue_cb;
+                            vulkan_ctx->unlock_queue = &vk_unlock_queue_cb;
 
                             auto ret = av_hwdevice_ctx_init(device_ref);
                             if (ret >= 0) {
@@ -956,8 +1076,8 @@ struct AVProducer::Impl
     std::string afilter_;
     std::string vfilter_;
 
-    core::gpu_accelerator* gpu_accelerator_    = nullptr;
-    bool                   hw_decode_active_   = false;
+    core::gpu_accelerator* gpu_accelerator_     = nullptr;
+    bool                   hw_decode_active_    = false;
     int                    hw_video_stream_idx_ = -1;
 
     int                              seekable_ = 2;
@@ -1127,14 +1247,13 @@ struct AVProducer::Impl
                 auto start    = start_.load();
                 auto duration = duration_.load();
 
-                start       = start != AV_NOPTS_VALUE ? start : 0;
-                auto end    = duration != AV_NOPTS_VALUE ? start + duration : INT64_MAX;
-                auto time   = frame.pts != AV_NOPTS_VALUE ? frame.pts + frame.duration : 0;
-                bool video_eof = hw_decode_active_
-                                    ? (decoders_.count(hw_video_stream_idx_) > 0 &&
-                                       decoders_.at(hw_video_stream_idx_).is_eof())
-                                    : video_filter_.eof;
-                buffer_eof_ = (video_eof && audio_filter_.eof) ||
+                start          = start != AV_NOPTS_VALUE ? start : 0;
+                auto end       = duration != AV_NOPTS_VALUE ? start + duration : INT64_MAX;
+                auto time      = frame.pts != AV_NOPTS_VALUE ? frame.pts + frame.duration : 0;
+                bool video_eof = hw_decode_active_ ? (decoders_.count(hw_video_stream_idx_) > 0 &&
+                                                      decoders_.at(hw_video_stream_idx_).is_eof())
+                                                   : video_filter_.eof;
+                buffer_eof_    = (video_eof && audio_filter_.eof) ||
                               av_rescale_q(time, TIME_BASE_Q, format_tb_) >= av_rescale_q(end, TIME_BASE_Q, format_tb_);
 
                 if (buffer_eof_) {
@@ -1149,7 +1268,7 @@ struct AVProducer::Impl
                 }
             }
 
-            bool                     progress      = false;
+            bool                     progress       = false;
             std::shared_ptr<AVFrame> hw_video_frame = nullptr;
             {
                 progress |= schedule();
@@ -1179,8 +1298,8 @@ struct AVProducer::Impl
             }
 
             {
-                bool waiting_video = hw_decode_active_ ? (!hw_video_frame)
-                                                       : (!video_filter_.frame && !video_filter_.eof);
+                bool waiting_video =
+                    hw_decode_active_ ? (!hw_video_frame) : (!video_filter_.frame && !video_filter_.eof);
                 bool waiting_audio = !audio_filter_.frame && !audio_filter_.eof;
 
                 if (waiting_video || waiting_audio) {
@@ -1217,12 +1336,10 @@ struct AVProducer::Impl
                 frame.video      = std::move(hw_video_frame);
                 frame.start_time = start_time;
                 if (frame.video->data[0]) {
-                    auto tb          = decoders_.at(hw_video_stream_idx_).ctx->pkt_timebase;
-                    auto fr          = decoders_.at(hw_video_stream_idx_).ctx->framerate;
-                    frame.pts        = av_rescale_q(frame.video->pts, tb, TIME_BASE_Q) - start_time;
-                    frame.duration   = (fr.num > 0 && fr.den > 0)
-                                         ? av_rescale_q(1, av_inv_q(fr), TIME_BASE_Q)
-                                         : 0;
+                    auto tb        = decoders_.at(hw_video_stream_idx_).ctx->pkt_timebase;
+                    auto fr        = decoders_.at(hw_video_stream_idx_).ctx->framerate;
+                    frame.pts      = av_rescale_q(frame.video->pts, tb, TIME_BASE_Q) - start_time;
+                    frame.duration = (fr.num > 0 && fr.den > 0) ? av_rescale_q(1, av_inv_q(fr), TIME_BASE_Q) : 0;
                 }
             } else if (video_filter_.frame) {
                 frame.video      = std::move(video_filter_.frame);
@@ -1245,13 +1362,13 @@ struct AVProducer::Impl
 #ifdef ENABLE_VULKAN
             if (hw_decode_active_ && frame.video && frame.video->data[0]) {
                 // Hardware decode path: import GPU textures directly via gpu_accelerator
-                frame.frame = make_hw_frame(this, *gpu_accelerator_, frame.video, frame.audio,
-                                            get_color_space(frame.video), scale_mode_);
+                frame.frame = make_hw_frame(
+                    this, *gpu_accelerator_, frame.video, frame.audio, get_color_space(frame.video), scale_mode_);
             } else
 #endif
             {
-                frame.frame = core::draw_frame(
-                    make_frame(this, *frame_factory_, frame.video, frame.audio, get_color_space(frame.video), scale_mode_));
+                frame.frame = core::draw_frame(make_frame(
+                    this, *frame_factory_, frame.video, frame.audio, get_color_space(frame.video), scale_mode_));
             }
             frame.frame_count = frame_count_++;
 
@@ -1546,9 +1663,10 @@ struct AVProducer::Impl
                 if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
                     auto it = decoders_.find(st->index);
                     if (it == decoders_.end()) {
-                        it = decoders_.emplace(std::piecewise_construct,
-                                               std::forward_as_tuple(st->index),
-                                               std::forward_as_tuple(st, gpu_accelerator_))
+                        it = decoders_
+                                 .emplace(std::piecewise_construct,
+                                          std::forward_as_tuple(st->index),
+                                          std::forward_as_tuple(st, gpu_accelerator_))
                                  .first;
                     }
                     if (it->second.hw_decode_active) {
@@ -1556,8 +1674,9 @@ struct AVProducer::Impl
                         hw_video_stream_idx_ = st->index;
                         CASPAR_LOG(info) << print() << " Using hardware video decode path (no video filters)";
                     } else {
-                        CASPAR_LOG(info) << print() << " Hardware decode not available for this codec, "
-                                                       "falling back to CPU decode with filters";
+                        CASPAR_LOG(info) << print()
+                                         << " Hardware decode not available for this codec, "
+                                            "falling back to CPU decode with filters";
                     }
                     break;
                 }

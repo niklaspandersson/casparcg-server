@@ -65,9 +65,9 @@ void log_callback(void* ptr, int level, const char* fmt, va_list vl)
             AVClass** parent =
                 *reinterpret_cast<AVClass***>(static_cast<uint8_t*>(ptr) + avc->parent_log_context_offset);
             if ((parent != nullptr) && (*parent != nullptr))
-                std::snprintf(line, sizeof(line), "[%s @ %p] ", (*parent)->item_name(parent), parent);
+                std::snprintf(line, sizeof(line), "[] ");
         }
-        std::snprintf(line + strlen(line), sizeof(line) - strlen(line), "[%s @ %p] ", avc->item_name(ptr), ptr);
+        std::snprintf(line + strlen(line), sizeof(line) - strlen(line), "[] ");
     }
 
     std::vsnprintf(line + strlen(line), sizeof(line) - strlen(line), fmt, vl);

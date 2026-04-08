@@ -131,11 +131,16 @@ struct device::impl : public std::enable_shared_from_this<impl>
     vk::PhysicalDevice                 _physical_device;
     vk::Device                         _device;
     vk::Queue                          _queue;
-    uint32_t                           _queue_family_index        = 0;
-    int                                _decode_queue_family_index = -1;
-    vk::CommandPool                    _command_pool;
-    VmaAllocator                       _allocator;
-    std::vector<std::string>           _enabled_device_extensions;
+    // Protects all submissions to _queue. VkQueue is externally synchronized in Vulkan,
+    // so every vkQueueSubmit on the same queue object must be serialized — including
+    // submissions made by FFmpeg's Vulkan hwcontext from its decode thread, which
+    // synchronizes via the lock_queue / unlock_queue callbacks we install.
+    std::mutex               _queue_mutex;
+    uint32_t                 _queue_family_index        = 0;
+    int                      _decode_queue_family_index = -1;
+    vk::CommandPool          _command_pool;
+    VmaAllocator             _allocator;
+    std::vector<std::string> _enabled_device_extensions;
 
     std::array<std::shared_ptr<pipeline>, 2> _pipelines;
 
@@ -215,6 +220,10 @@ struct device::impl : public std::enable_shared_from_this<impl>
         _vkb_physical_device.enable_extension_if_present(VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME);
         _vkb_physical_device.enable_extension_if_present(VK_KHR_VIDEO_DECODE_AV1_EXTENSION_NAME);
         _vkb_physical_device.enable_extension_if_present(VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME);
+
+        vk::PhysicalDeviceVideoMaintenance1FeaturesKHR videoMaintenance1Features;
+        videoMaintenance1Features.videoMaintenance1 = true;
+        _vkb_physical_device.enable_extension_features_if_present(videoMaintenance1Features);
 
         // Create the logical device
         _physical_device = vk::PhysicalDevice(_vkb_physical_device.physical_device);
@@ -414,7 +423,10 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
         vk::SubmitInfo submitInfo{};
         submitInfo.setCommandBuffers(cmd_buffer);
-        _queue.submit(submitInfo, fence);
+        {
+            std::lock_guard<std::mutex> lock(_queue_mutex);
+            _queue.submit(submitInfo, fence);
+        }
 
         _transfer_cmd_buffers.push_back({cmd_buffer, fence});
 
@@ -428,7 +440,14 @@ struct device::impl : public std::enable_shared_from_this<impl>
         return _device.allocateCommandBuffers(
             vk::CommandBufferAllocateInfo(_command_pool, vk::CommandBufferLevel::ePrimary, count));
     }
-    void submit(const vk::SubmitInfo& submitInfo, vk::Fence fence) { _queue.submit(submitInfo, fence); }
+    void submit(const vk::SubmitInfo& submitInfo, vk::Fence fence)
+    {
+        std::lock_guard<std::mutex> lock(_queue_mutex);
+        _queue.submit(submitInfo, fence);
+    }
+
+    void lock_queue() { _queue_mutex.lock(); }
+    void unlock_queue() { _queue_mutex.unlock(); }
 
     std::shared_ptr<texture>
     create_attachment(int width, int height, common::bit_depth depth, uint32_t components_count)
@@ -818,6 +837,8 @@ std::vector<vk::CommandBuffer>     device::allocateCommandBuffers(uint32_t count
     return impl_->allocateCommandBuffers(count);
 }
 void             device::submit(const vk::SubmitInfo& submitInfo, vk::Fence fence) { impl_->submit(submitInfo, fence); }
+void             device::lock_queue() { impl_->lock_queue(); }
+void             device::unlock_queue() { impl_->unlock_queue(); }
 vk::Device       device::getVkDevice() const { return impl_->_device; }
 VkInstance       device::getVkInstance() const { return static_cast<VkInstance>(impl_->_vkb_instance.instance); }
 VkPhysicalDevice device::getVkPhysicalDevice() const { return static_cast<VkPhysicalDevice>(impl_->_physical_device); }
