@@ -155,17 +155,19 @@ casparcg_add_runtime_dependency("${glew_SOURCE_DIR}/bin/Release/x64/glew32.dll")
 IF(ENABLE_VULKAN)
 	find_package(Vulkan REQUIRED)
 	
-	FetchContent_Declare(fetch_vk_bootstrap
-			GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap
-			GIT_TAG        v1.4.328 #suggest using a tag so the library doesn't update whenever new commits are pushed to a branch
+	FetchContent_Declare(vk_bootstrap
+			URL ${CASPARCG_DOWNLOAD_MIRROR}/vk-bootstrap/vk-bootstrap-1.4.328.zip
+			URL_HASH SHA256=10f257c30a0a49d30b28a72cf3a7942d93a61f977adaa04bee29304c6506dc12
+			DOWNLOAD_DIR ${CASPARCG_DOWNLOAD_CACHE}
 			)
-	FetchContent_MakeAvailable(fetch_vk_bootstrap)
+	FetchContent_MakeAvailable(vk_bootstrap)
 
-	FetchContent_Declare(fetch_vma
-			GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
-			GIT_TAG        v3.3.0 #suggest using a tag so the library doesn't update whenever new commits are pushed to a branch
+	FetchContent_Declare(vma
+			URL ${CASPARCG_DOWNLOAD_MIRROR}/VulkanMemoryAllocator/VulkanMemoryAllocator-3.3.0.zip
+			URL_HASH SHA256=81755d8fcb411b97292c6682e828501315db319374c7c34ba6e1226452c6c392
+			DOWNLOAD_DIR ${CASPARCG_DOWNLOAD_CACHE}
 	)
-	FetchContent_MakeAvailable(fetch_vma)
+	FetchContent_MakeAvailable(vma)
 ENDIF()
 
 # SFML
