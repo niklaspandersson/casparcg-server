@@ -53,8 +53,10 @@ struct accelerator::impl
                                    L"extensions will not be applied";
             return;
         }
-        for (auto& ext : reqs.optional_extensions)
-            pending_vulkan_requirements_.optional_extensions.push_back(std::move(ext));
+        pending_vulkan_requirements_.optional_extensions.insert(
+            pending_vulkan_requirements_.optional_extensions.end(),
+            std::make_move_iterator(reqs.optional_extensions.begin()),
+            std::make_move_iterator(reqs.optional_extensions.end()));
     }
 #endif
 

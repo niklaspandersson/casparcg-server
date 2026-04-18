@@ -215,26 +215,22 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
         // Enable optional extensions requested by modules/producers.
         // Extensions not supported by the physical device are silently skipped.
+        bool video_maintenance1_enabled = false;
         for (const auto& ext : requirements.optional_extensions) {
             const bool enabled = _vkb_physical_device.enable_extension_if_present(ext.c_str());
             if (enabled) {
                 CASPAR_LOG(debug) << "Vulkan: enabled optional extension: " << ext;
+                if (ext == VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME)
+                    video_maintenance1_enabled = true;
             }
         }
 
-        // When VK_KHR_video_maintenance1 was requested and is present, also
-        // activate its matching feature struct so the driver exposes the full
-        // feature set.
-        {
-            const auto& exts = _vkb_physical_device.get_extensions();
-            const bool has_video_maintenance1 =
-                std::find(exts.begin(), exts.end(), std::string(VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME)) !=
-                exts.end();
-            if (has_video_maintenance1) {
-                vk::PhysicalDeviceVideoMaintenance1FeaturesKHR videoMaintenance1Features;
-                videoMaintenance1Features.videoMaintenance1 = true;
-                _vkb_physical_device.enable_extension_features_if_present(videoMaintenance1Features);
-            }
+        // When VK_KHR_video_maintenance1 was enabled, also activate its
+        // matching feature struct so the driver exposes the full feature set.
+        if (video_maintenance1_enabled) {
+            vk::PhysicalDeviceVideoMaintenance1FeaturesKHR videoMaintenance1Features;
+            videoMaintenance1Features.videoMaintenance1 = true;
+            _vkb_physical_device.enable_extension_features_if_present(videoMaintenance1Features);
         }
 
         // Create the logical device
