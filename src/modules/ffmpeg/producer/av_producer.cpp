@@ -480,6 +480,14 @@ class Decoder
                     }
 
                     if (vulkan_supported) {
+                        // Also verify that the video decode extensions were actually enabled
+                        // at device creation time (they are optional and may be absent on
+                        // some hardware or driver versions).
+                        vulkan_supported = gpu->has_extension(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME) &&
+                                           gpu->has_extension(VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME);
+                    }
+
+                    if (vulkan_supported) {
                         // Create AVHWDeviceContext sharing the accelerator's Vulkan device
                         AVBufferRef* device_ref = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_VULKAN);
                         if (device_ref) {
@@ -557,7 +565,7 @@ class Decoder
                             // In the normal path FFmpeg gets queue index 0 of the
                             // graphics family and we use index 1, so the two are
                             // distinct VkQueue objects and no locking is needed.
-                            if (gpu->vk_shared_queue_with_ffmpeg()) {
+                            if (gpu->vk_shared_render_queue()) {
                                 auto* lock_ctx           = new vk_queue_lock_ctx{gpu, qfi};
                                 device_ctx->user_opaque  = lock_ctx;
                                 device_ctx->free         = &vk_queue_lock_ctx_free;

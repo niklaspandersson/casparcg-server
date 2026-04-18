@@ -135,7 +135,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
     // ≥ 2 graphics queues we hand FFmpeg index 0 and use index 1 ourselves,
     // so the two queues are distinct VkQueue objects and no locking is needed.
     std::mutex               _queue_mutex;
-    bool                     _shared_with_ffmpeg        = false;
+    bool                     _shared_render_queue        = false;
     uint32_t                 _queue_family_index        = 0;
     int                      _decode_queue_family_index = -1;
     vk::CommandPool          _command_pool;
@@ -155,7 +155,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
     decltype(make_work_guard(io_context_)) work_;
     std::thread                            thread_;
 
-    impl()
+    explicit impl(const vulkan_device_requirements& requirements)
         : work_(make_work_guard(io_context_))
     {
         CASPAR_LOG(info) << L"Initializing Vulkan Device.";
@@ -213,17 +213,29 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
         CASPAR_LOG(info) << "Selected Vulkan device: " << _vkb_physical_device.properties.deviceName;
 
-        // Enable FFmpeg hw decode extensions if supported by the device
-        _vkb_physical_device.enable_extension_if_present(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME);
-        _vkb_physical_device.enable_extension_if_present(VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME);
-        _vkb_physical_device.enable_extension_if_present(VK_KHR_VIDEO_DECODE_H264_EXTENSION_NAME);
-        _vkb_physical_device.enable_extension_if_present(VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME);
-        _vkb_physical_device.enable_extension_if_present(VK_KHR_VIDEO_DECODE_AV1_EXTENSION_NAME);
-        _vkb_physical_device.enable_extension_if_present(VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME);
+        // Enable optional extensions requested by modules/producers.
+        // Extensions not supported by the physical device are silently skipped.
+        for (const auto& ext : requirements.optional_extensions) {
+            const bool enabled = _vkb_physical_device.enable_extension_if_present(ext.c_str());
+            if (enabled) {
+                CASPAR_LOG(debug) << "Vulkan: enabled optional extension: " << ext;
+            }
+        }
 
-        vk::PhysicalDeviceVideoMaintenance1FeaturesKHR videoMaintenance1Features;
-        videoMaintenance1Features.videoMaintenance1 = true;
-        _vkb_physical_device.enable_extension_features_if_present(videoMaintenance1Features);
+        // When VK_KHR_video_maintenance1 was requested and is present, also
+        // activate its matching feature struct so the driver exposes the full
+        // feature set.
+        {
+            const auto& exts = _vkb_physical_device.get_extensions();
+            const bool has_video_maintenance1 =
+                std::find(exts.begin(), exts.end(), std::string(VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME)) !=
+                exts.end();
+            if (has_video_maintenance1) {
+                vk::PhysicalDeviceVideoMaintenance1FeaturesKHR videoMaintenance1Features;
+                videoMaintenance1Features.videoMaintenance1 = true;
+                _vkb_physical_device.enable_extension_features_if_present(videoMaintenance1Features);
+            }
+        }
 
         // Create the logical device
         _physical_device = vk::PhysicalDevice(_vkb_physical_device.physical_device);
@@ -254,7 +266,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
         // submissions against ours via a mutex. If only one queue is exposed
         // we fall back to sharing it with the lock_queue/unlock_queue mutex.
         const uint32_t graphics_queue_count = std::min<uint32_t>(2, queue_families[graphics_queue_family].queueCount);
-        _shared_with_ffmpeg                 = (graphics_queue_count < 2);
+        _shared_render_queue                 = (graphics_queue_count < 2);
 
         std::vector<vkb::CustomQueueDescription> queue_descs;
         std::vector<float>                       gfx_priorities(graphics_queue_count, 1.0f);
@@ -277,8 +289,8 @@ struct device::impl : public std::enable_shared_from_this<impl>
         VULKAN_HPP_DEFAULT_DISPATCHER.init(_device);
         // Use queue index 1 when available (queue 0 is reserved for FFmpeg /
         // other external producers); otherwise share queue 0 and serialize via
-        // _queue_mutex (see _shared_with_ffmpeg above).
-        const uint32_t our_queue_index = _shared_with_ffmpeg ? 0u : 1u;
+        // _queue_mutex (see _shared_render_queue above).
+        const uint32_t our_queue_index = _shared_render_queue ? 0u : 1u;
         _queue                         = _device.getQueue(graphics_queue_family, our_queue_index);
         _queue_family_index            = graphics_queue_family;
         auto queue_family              = _queue_family_index;
@@ -432,7 +444,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
         vk::SubmitInfo submitInfo{};
         submitInfo.setCommandBuffers(cmd_buffer);
-        if (_shared_with_ffmpeg) {
+        if (_shared_render_queue) {
             std::lock_guard<std::mutex> lock(_queue_mutex);
             _queue.submit(submitInfo, fence);
         } else {
@@ -453,7 +465,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
     }
     void submit(const vk::SubmitInfo& submitInfo, vk::Fence fence)
     {
-        if (_shared_with_ffmpeg) {
+        if (_shared_render_queue) {
             std::lock_guard<std::mutex> lock(_queue_mutex);
             _queue.submit(submitInfo, fence);
         } else {
@@ -466,15 +478,15 @@ struct device::impl : public std::enable_shared_from_this<impl>
     // unconditionally so we keep the methods callable in both modes.
     void lock_queue()
     {
-        if (_shared_with_ffmpeg)
+        if (_shared_render_queue)
             _queue_mutex.lock();
     }
     void unlock_queue()
     {
-        if (_shared_with_ffmpeg)
+        if (_shared_render_queue)
             _queue_mutex.unlock();
     }
-    bool shared_with_ffmpeg() const { return _shared_with_ffmpeg; }
+    bool shared_render_queue() const { return _shared_render_queue; }
 
     std::shared_ptr<texture>
     create_attachment(int width, int height, common::bit_depth depth, uint32_t components_count)
@@ -852,8 +864,8 @@ struct device::impl : public std::enable_shared_from_this<impl>
     }
 };
 
-device::device()
-    : impl_(new impl())
+device::device(const vulkan_device_requirements& requirements)
+    : impl_(new impl(requirements))
 {
 }
 device::~device() {}
@@ -866,7 +878,7 @@ std::vector<vk::CommandBuffer>     device::allocateCommandBuffers(uint32_t count
 void             device::submit(const vk::SubmitInfo& submitInfo, vk::Fence fence) { impl_->submit(submitInfo, fence); }
 void             device::lock_queue() { impl_->lock_queue(); }
 void             device::unlock_queue() { impl_->unlock_queue(); }
-bool             device::shared_with_ffmpeg() const { return impl_->shared_with_ffmpeg(); }
+bool             device::shared_render_queue() const { return impl_->shared_render_queue(); }
 vk::Device       device::getVkDevice() const { return impl_->_device; }
 VkInstance       device::getVkInstance() const { return static_cast<VkInstance>(impl_->_vkb_instance.instance); }
 VkPhysicalDevice device::getVkPhysicalDevice() const { return static_cast<VkPhysicalDevice>(impl_->_physical_device); }

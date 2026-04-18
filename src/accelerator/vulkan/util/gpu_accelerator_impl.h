@@ -44,7 +44,9 @@ class gpu_accelerator_impl final : public core::gpu_accelerator
     const std::vector<std::string>& vk_enabled_device_extensions() const override;
     int    vk_decode_queue_family_index() const override;
 
-    bool vk_shared_queue_with_ffmpeg() const override;
+    bool has_extension(const std::string& name) const override;
+
+    bool vk_shared_render_queue() const override;
     void vk_lock_queue() override;
     void vk_unlock_queue() override;
 

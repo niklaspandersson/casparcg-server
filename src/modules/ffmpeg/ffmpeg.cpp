@@ -28,6 +28,7 @@
 
 #include <common/log.h>
 
+#include <accelerator/accelerator.h>
 #include <core/module_dependencies.h>
 
 #include <mutex>
@@ -37,6 +38,9 @@ extern "C" {
 #include <libavfilter/avfilter.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#ifdef ENABLE_VULKAN
+#include <libavutil/hwcontext_vulkan.h>
+#endif
 }
 
 namespace caspar { namespace ffmpeg {
@@ -119,4 +123,24 @@ void uninit()
     // avfilter_uninit();
     avformat_network_deinit();
 }
+
+#ifdef ENABLE_VULKAN
+void register_vulkan_requirements(accelerator::accelerator& acc)
+{
+    // Request the Vulkan extensions needed for FFmpeg hardware video decoding.
+    // These are all optional: if the physical device does not support them the
+    // extension is simply not enabled, and the producer falls back to CPU decode.
+    accelerator::vulkan_device_requirements reqs;
+    reqs.optional_extensions = {
+        VK_KHR_VIDEO_QUEUE_EXTENSION_NAME,
+        VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME,
+        VK_KHR_VIDEO_DECODE_H264_EXTENSION_NAME,
+        VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME,
+        VK_KHR_VIDEO_DECODE_AV1_EXTENSION_NAME,
+        VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME,
+    };
+    acc.add_vulkan_requirements(std::move(reqs));
+}
+#endif
+
 }} // namespace caspar::ffmpeg

@@ -21,6 +21,10 @@
 
 #pragma once
 
+namespace caspar { namespace accelerator {
+class accelerator;
+}} // namespace caspar::accelerator
+
 namespace caspar { namespace ffmpeg {
 
 void                  init(const core::module_dependencies& dependencies);
@@ -28,5 +32,12 @@ void                  uninit();
 std::shared_ptr<void> temporary_enable_quiet_logging_for_thread(bool enable);
 void                  enable_quiet_logging_for_thread();
 bool                  is_logging_quiet_for_thread();
+
+#ifdef ENABLE_VULKAN
+// Register the Vulkan extensions required by the FFmpeg hardware decode path.
+// Must be called on the accelerator before device creation (before any call to
+// accelerator::create_image_mixer or accelerator::get_device).
+void register_vulkan_requirements(accelerator::accelerator& acc);
+#endif
 
 }} // namespace caspar::ffmpeg

@@ -9,6 +9,10 @@
 #include <core/module_dependencies.h>
 ${CASPARCG_MODULE_INCLUDE_STATEMENTS}
 
+#ifdef ENABLE_VULKAN
+#include <accelerator/accelerator.h>
+#endif
+
 namespace caspar {
 
 static bool intercept_command_line_args(int argc, char** argv)
@@ -22,5 +26,13 @@ static void initialize_modules(const core::module_dependencies& dependencies)
 static void uninitialize_modules()
 {
 ${CASPARCG_MODULE_UNINIT_STATEMENTS}}
+
+// Register Vulkan device extensions and features required by all modules that
+// opted in with VULKAN_REQUIREMENTS_FUNCTION in their CMakeLists.txt.
+// Must be called before the Vulkan device is first created (i.e. before
+// accelerator::create_image_mixer or accelerator::get_device).
+static void register_module_vulkan_requirements([[maybe_unused]] caspar::accelerator::accelerator& acc)
+{
+${CASPARCG_MODULE_VULKAN_REQ_STATEMENTS}}
 
 }

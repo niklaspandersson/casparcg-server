@@ -26,6 +26,9 @@ struct accelerator::impl
     std::shared_ptr<accelerator_device> device_;
     const core::video_format_repository format_repository_;
     accelerator_backend                 backend_;
+#ifdef ENABLE_VULKAN
+    vulkan_device_requirements pending_vulkan_requirements_;
+#endif
 
     impl(const core::video_format_repository format_repository)
         : format_repository_(format_repository)
@@ -41,6 +44,19 @@ struct accelerator::impl
 
         backend_ = backend;
     }
+
+#ifdef ENABLE_VULKAN
+    void add_vulkan_requirements(vulkan_device_requirements reqs)
+    {
+        if (device_) {
+            CASPAR_LOG(warning) << L"[accelerator] Vulkan requirements registered after device creation; "
+                                   L"extensions will not be applied";
+            return;
+        }
+        for (auto& ext : reqs.optional_extensions)
+            pending_vulkan_requirements_.optional_extensions.push_back(std::move(ext));
+    }
+#endif
 
     std::unique_ptr<core::image_mixer> create_image_mixer(int channel_id, common::bit_depth depth)
     {
@@ -68,7 +84,8 @@ struct accelerator::impl
 #ifdef ENABLE_VULKAN
         if (backend_ == accelerator_backend::vulkan) {
             if (!device_) {
-                device_ = std::dynamic_pointer_cast<accelerator_device>(std::make_shared<vulkan::device>());
+                device_ = std::dynamic_pointer_cast<accelerator_device>(
+                    std::make_shared<vulkan::device>(pending_vulkan_requirements_));
             }
 
             return device_;
@@ -90,6 +107,13 @@ accelerator::accelerator(const core::video_format_repository format_repository)
 accelerator::~accelerator() {}
 
 void accelerator::set_backend(accelerator_backend backend) { impl_->set_backend(backend); }
+
+#ifdef ENABLE_VULKAN
+void accelerator::add_vulkan_requirements(vulkan_device_requirements reqs)
+{
+    impl_->add_vulkan_requirements(std::move(reqs));
+}
+#endif
 
 std::unique_ptr<core::image_mixer> accelerator::create_image_mixer(const int channel_id, common::bit_depth depth)
 {

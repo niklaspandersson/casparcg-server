@@ -87,15 +87,20 @@ class gpu_accelerator
     virtual const std::vector<std::string>& vk_enabled_device_extensions() const = 0;
     virtual int    vk_decode_queue_family_index() const = 0; // -1 if not available
 
-    // True only when the accelerator failed to allocate a separate VkQueue for FFmpeg
-    // and is sharing the render queue with it. In that (fallback) case, FFmpeg's
-    // hwcontext must call vk_lock_queue/vk_unlock_queue around its vkQueueSubmit
-    // calls. In the normal case the accelerator hands FFmpeg a queue we never touch
-    // and no locking is required.
-    virtual bool vk_shared_queue_with_ffmpeg() const = 0;
+    // Returns true when the named Vulkan device extension is enabled.
+    // Prefer this over iterating vk_enabled_device_extensions() directly.
+    virtual bool has_extension(const std::string& name) const = 0;
+
+    // True only when the accelerator failed to allocate a separate VkQueue for
+    // external producers and is sharing the render queue with them.  In that
+    // (fallback) case, an external hw-decode context must call
+    // vk_lock_queue/vk_unlock_queue around its vkQueueSubmit calls.  In the
+    // normal case the accelerator hands the external producer a queue it never
+    // touches and no locking is required.
+    virtual bool vk_shared_render_queue() const = 0;
 
     // Manual lock/unlock for the render queue. Only meaningful when
-    // vk_shared_queue_with_ffmpeg() is true; otherwise these are no-ops.
+    // vk_shared_render_queue() is true; otherwise these are no-ops.
     virtual void vk_lock_queue()   = 0;
     virtual void vk_unlock_queue() = 0;
 

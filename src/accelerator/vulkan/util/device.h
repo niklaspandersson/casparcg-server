@@ -54,7 +54,11 @@ class device final
     , public accelerator_device
 {
   public:
-    device();
+    // requirements: optional Vulkan extensions/features to enable at device
+    // creation time.  Modules register their requirements via
+    // accelerator::add_vulkan_requirements() before the first call to
+    // accelerator::get_device().
+    explicit device(const vulkan_device_requirements& requirements = {});
     ~device();
 
     device(const device&) = delete;
@@ -78,7 +82,7 @@ class device final
     // True only when this device fell back to sharing the render queue with
     // FFmpeg. The producer side uses this to decide whether to install the
     // lock_queue/unlock_queue callbacks at all.
-    bool                               shared_with_ffmpeg() const;
+    bool                               shared_render_queue() const;
     vk::Device                         getVkDevice() const;
     VkInstance                         getVkInstance() const;
     VkPhysicalDevice                   getVkPhysicalDevice() const;

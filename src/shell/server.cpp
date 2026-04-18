@@ -279,6 +279,11 @@ struct server::impl
 #endif
 
         accelerator_.set_backend(backend);
+
+        // Allow modules to register their Vulkan extension/feature requirements.
+        // The device is created lazily (on first get_device()/create_image_mixer()),
+        // so requirements registered here are always applied before device creation.
+        register_module_vulkan_requirements(accelerator_);
     }
 
     std::vector<boost::property_tree::wptree> setup_channels(const boost::property_tree::wptree& pt)

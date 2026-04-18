@@ -26,6 +26,7 @@ casparcg_add_module_project(ffmpeg
 	SOURCES ${SOURCES}
 	INIT_FUNCTION "ffmpeg::init"
 	UNINIT_FUNCTION "ffmpeg::uninit"
+	VULKAN_REQUIREMENTS_FUNCTION "ffmpeg::register_vulkan_requirements"
 )
 
 target_include_directories(ffmpeg PRIVATE

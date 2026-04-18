@@ -30,6 +30,7 @@
 #include <core/frame/pixel_format.h>
 
 #include <any>
+#include <algorithm>
 #include <future>
 #include <vector>
 
@@ -69,7 +70,13 @@ int gpu_accelerator_impl::vk_decode_queue_family_index() const
     return vulkan_->getDecodeQueueFamilyIndex();
 }
 
-bool gpu_accelerator_impl::vk_shared_queue_with_ffmpeg() const { return vulkan_->shared_with_ffmpeg(); }
+bool gpu_accelerator_impl::has_extension(const std::string& name) const
+{
+    const auto& exts = vulkan_->getEnabledDeviceExtensions();
+    return std::find(exts.begin(), exts.end(), name) != exts.end();
+}
+
+bool gpu_accelerator_impl::vk_shared_render_queue() const { return vulkan_->shared_render_queue(); }
 void gpu_accelerator_impl::vk_lock_queue() { vulkan_->lock_queue(); }
 void gpu_accelerator_impl::vk_unlock_queue() { vulkan_->unlock_queue(); }
 
