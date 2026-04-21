@@ -179,9 +179,11 @@ struct device::impl : public std::enable_shared_from_this<impl>
         auto gpu_selector = vkb::PhysicalDeviceSelector(_vkb_instance);
 
         vk::PhysicalDeviceVulkan12Features features12;
-        features12.descriptorIndexing              = true;
-        features12.descriptorBindingPartiallyBound = true;
-        features12.timelineSemaphore               = true;
+        features12.descriptorIndexing                        = true;
+        features12.descriptorBindingPartiallyBound           = true;
+        features12.runtimeDescriptorArray                    = true;
+        features12.shaderSampledImageArrayNonUniformIndexing = true;
+        features12.timelineSemaphore                         = true;
 
         vk::PhysicalDeviceVulkan13Features features13;
         features13.dynamicRendering = true;
@@ -231,7 +233,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
         timeline_info.initialValue  = 0;
         vk::SemaphoreCreateInfo semaphore_info{};
         semaphore_info.pNext = &timeline_info;
-        _semaphore = _device.createSemaphore(semaphore_info);
+        _semaphore           = _device.createSemaphore(semaphore_info);
 
         VmaVulkanFunctions vulkanFunctions    = {};
         vulkanFunctions.vkGetInstanceProcAddr = _vkb_instance.fp_vkGetInstanceProcAddr;
@@ -569,32 +571,32 @@ struct device::impl : public std::enable_shared_from_this<impl>
                                        vk::Offset3D(0, 0, 0),
                                        vk::Extent3D(width, height, 1));
 
-            submitSingleTimeCommands(
-                [&](vk::CommandBuffer cmd) {
-                    transitionImageLayout(tex->id(),
-                                          vk::ImageLayout::eUndefined,
-                                          vk::AccessFlagBits2::eNone,
-                                          vk::PipelineStageFlagBits2::eTopOfPipe,
+            submitSingleTimeCommands([&](vk::CommandBuffer cmd) {
+                transitionImageLayout(tex->id(),
+                                      vk::ImageLayout::eUndefined,
+                                      vk::AccessFlagBits2::eNone,
+                                      vk::PipelineStageFlagBits2::eTopOfPipe,
 
-                                          vk::ImageLayout::eTransferDstOptimal,
-                                          vk::AccessFlagBits2::eTransferWrite,
-                                          vk::PipelineStageFlagBits2::eTransfer,
-                                          cmd);
+                                      vk::ImageLayout::eTransferDstOptimal,
+                                      vk::AccessFlagBits2::eTransferWrite,
+                                      vk::PipelineStageFlagBits2::eTransfer,
+                                      cmd);
 
-                    cmd.copyBufferToImage(buf->id(), tex->id(), vk::ImageLayout::eTransferDstOptimal, region);
+                cmd.copyBufferToImage(buf->id(), tex->id(), vk::ImageLayout::eTransferDstOptimal, region);
 
-                    transitionImageLayout(tex->id(),
-                                          vk::ImageLayout::eTransferDstOptimal,
-                                          vk::AccessFlagBits2::eTransferWrite,
-                                          vk::PipelineStageFlagBits2::eTransfer,
+                transitionImageLayout(tex->id(),
+                                      vk::ImageLayout::eTransferDstOptimal,
+                                      vk::AccessFlagBits2::eTransferWrite,
+                                      vk::PipelineStageFlagBits2::eTransfer,
 
-                                          vk::ImageLayout::eShaderReadOnlyOptimal,
-                                          vk::AccessFlagBits2::eShaderRead,
-                                          vk::PipelineStageFlagBits2::eFragmentShader,
-                                          cmd);
-                });
+                                      vk::ImageLayout::eShaderReadOnlyOptimal,
+                                      vk::AccessFlagBits2::eShaderRead,
+                                      vk::PipelineStageFlagBits2::eFragmentShader,
+                                      cmd);
+            });
 
-            // No need to wait here, GPU-GPU deps (the usage of this texture on the device) are enforced by the memory barriers
+            // No need to wait here, GPU-GPU deps (the usage of this texture on the device) are enforced by the memory
+            // barriers
             return tex;
         });
     }
@@ -617,19 +619,18 @@ struct device::impl : public std::enable_shared_from_this<impl>
                 vk::Extent3D{static_cast<uint32_t>(source->width()), static_cast<uint32_t>(source->height()), 1};
             copyInfo.setRegions(region);
 
-            auto signal_value = submitSingleTimeCommands(
-                [&](vk::CommandBuffer cmd) {
-                    transitionImageLayout(source->id(),
-                                          vk::ImageLayout::eRenderingLocalRead,
-                                          vk::AccessFlagBits2::eColorAttachmentWrite,
-                                          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            auto signal_value = submitSingleTimeCommands([&](vk::CommandBuffer cmd) {
+                transitionImageLayout(source->id(),
+                                      vk::ImageLayout::eRenderingLocalRead,
+                                      vk::AccessFlagBits2::eColorAttachmentWrite,
+                                      vk::PipelineStageFlagBits2::eColorAttachmentOutput,
 
-                                          vk::ImageLayout::eTransferSrcOptimal,
-                                          vk::AccessFlagBits2::eHostRead,
-                                          vk::PipelineStageFlagBits2::eHost,
-                                          cmd);
-                    cmd.copyImageToBuffer2(copyInfo);
-                });
+                                      vk::ImageLayout::eTransferSrcOptimal,
+                                      vk::AccessFlagBits2::eHostRead,
+                                      vk::PipelineStageFlagBits2::eHost,
+                                      cmd);
+                cmd.copyImageToBuffer2(copyInfo);
+            });
 
             return {buf, signal_value};
         });
