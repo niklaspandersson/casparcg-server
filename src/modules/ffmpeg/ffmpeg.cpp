@@ -32,6 +32,12 @@
 
 #include <mutex>
 
+#ifdef ENABLE_VULKAN
+#include <VkBootstrap.h>
+#include <accelerator/accelerator.h>
+#include <vulkan/vulkan.hpp>
+#endif
+
 extern "C" {
 #include <libavdevice/avdevice.h>
 #include <libavfilter/avfilter.h>
@@ -119,4 +125,20 @@ void uninit()
     // avfilter_uninit();
     avformat_network_deinit();
 }
+
+#ifdef ENABLE_VULKAN
+void register_vulkan_requirements(vkb::PhysicalDevice& pd)
+{
+    pd.enable_extension_if_present(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME);
+    pd.enable_extension_if_present(VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME);
+    pd.enable_extension_if_present(VK_KHR_VIDEO_DECODE_H264_EXTENSION_NAME);
+    pd.enable_extension_if_present(VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME);
+    pd.enable_extension_if_present(VK_KHR_VIDEO_DECODE_AV1_EXTENSION_NAME);
+    pd.enable_extension_if_present(VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME);
+
+    vk::PhysicalDeviceVideoMaintenance1FeaturesKHR videoMaintenance1Features;
+    videoMaintenance1Features.videoMaintenance1 = true;
+    pd.enable_extension_features_if_present(videoMaintenance1Features);
+}
+#endif
 }} // namespace caspar::ffmpeg

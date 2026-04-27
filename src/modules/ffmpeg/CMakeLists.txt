@@ -22,11 +22,20 @@ set(SOURCES
 	StdAfx.h
 )
 
-casparcg_add_module_project(ffmpeg
-	SOURCES ${SOURCES}
-	INIT_FUNCTION "ffmpeg::init"
-	UNINIT_FUNCTION "ffmpeg::uninit"
-)
+if (ENABLE_VULKAN)
+	casparcg_add_module_project(ffmpeg
+		SOURCES ${SOURCES}
+		INIT_FUNCTION "ffmpeg::init"
+		UNINIT_FUNCTION "ffmpeg::uninit"
+		VULKAN_REQUIREMENTS_FUNCTION "ffmpeg::register_vulkan_requirements"
+	)
+else ()
+	casparcg_add_module_project(ffmpeg
+		SOURCES ${SOURCES}
+		INIT_FUNCTION "ffmpeg::init"
+		UNINIT_FUNCTION "ffmpeg::uninit"
+	)
+endif ()
 
 target_include_directories(ffmpeg PRIVATE
     ${FFMPEG_INCLUDE_PATH}
@@ -47,3 +56,8 @@ else()
 			${FFMPEG_LIBRARIES}
 	)
 endif()
+
+IF(ENABLE_VULKAN)
+	target_compile_definitions(ffmpeg PRIVATE ENABLE_VULKAN)
+	target_link_libraries(ffmpeg PRIVATE Vulkan::Headers vk-bootstrap::vk-bootstrap)
+ENDIF()
