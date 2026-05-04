@@ -45,6 +45,7 @@ IF(ENABLE_VULKAN)
 		vulkan/util/buffer.cpp
 		vulkan/util/device.cpp
 		vulkan/util/pipeline.cpp
+		vulkan/util/queue_manager.cpp
 		vulkan/util/renderpass.cpp
 		vulkan/util/texture.cpp
 		vulkan/util/matrix.cpp
@@ -59,6 +60,7 @@ IF(ENABLE_VULKAN)
 		vulkan/util/device.h
 		vulkan/util/draw_params.h
 		vulkan/util/pipeline.h
+		vulkan/util/queue_manager.h
 		vulkan/util/texture.h
 		vulkan/util/matrix.h
 		vulkan/util/transforms.h

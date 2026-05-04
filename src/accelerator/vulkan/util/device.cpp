@@ -24,6 +24,7 @@
 #include "../image/image_kernel.h"
 #include "buffer.h"
 #include "pipeline.h"
+#include "queue_manager.h"
 #include "texture.h"
 
 #include <common/array.h>
@@ -127,7 +128,9 @@ struct device::impl : public std::enable_shared_from_this<impl>
     vk::PhysicalDeviceMemoryProperties _memoryProperties;
     vk::PhysicalDevice                 _physical_device;
     vk::Device                         _device;
-    vk::Queue                          _queue;
+    std::shared_ptr<queue_manager>     _queues;
+    std::shared_ptr<vulkan_queue>      _renderer_queue;
+    std::shared_ptr<vulkan_queue>      _transfer_queue; // null on hw without dedicated DMA family
     vk::CommandPool                    _command_pool;
     VmaAllocator                       _allocator;
 
@@ -212,9 +215,20 @@ struct device::impl : public std::enable_shared_from_this<impl>
                 fn(_vkb_physical_device);
         }
 
-        // Create the logical device
-        auto device_builder = vkb::DeviceBuilder(_vkb_physical_device);
-        _physical_device    = vk::PhysicalDevice(_vkb_physical_device.physical_device);
+        _physical_device = vk::PhysicalDevice(_vkb_physical_device.physical_device);
+
+        // Plan queues before vkCreateDevice — Vulkan requires the full set of
+        // queues to be declared up front.
+        const bool video_queue_enabled = _vkb_physical_device.is_extension_present(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME);
+        _queues                        = std::make_shared<queue_manager>(_physical_device, video_queue_enabled);
+
+        auto                                     plans = _queues->plan();
+        std::vector<vkb::CustomQueueDescription> queue_descs;
+        queue_descs.reserve(plans.size());
+        for (auto& p : plans)
+            queue_descs.emplace_back(p.family_index, p.priorities);
+
+        auto device_builder = vkb::DeviceBuilder(_vkb_physical_device).custom_queue_setup(std::move(queue_descs));
 
         auto device_res = device_builder.build();
         if (!device_res) {
@@ -224,12 +238,34 @@ struct device::impl : public std::enable_shared_from_this<impl>
         auto vkb_device = device_res.value();
         _device         = vk::Device(vkb_device.device);
         VULKAN_HPP_DEFAULT_DISPATCHER.init(_device);
-        _queue            = vk::Queue(vkb_device.get_queue(vkb::QueueType::graphics).value());
-        auto queue_family = vkb_device.get_queue_index(vkb::QueueType::graphics).value();
+
+        _queues->populate(_device);
+
+        queue_request gfx_req{};
+        gfx_req.required_flags   = vk::QueueFlagBits::eGraphics;
+        gfx_req.prefer_exclusive = true;
+        gfx_req.label            = "renderer";
+        _renderer_queue          = _queues->acquire_queue(gfx_req);
+        if (!_renderer_queue) {
+            CASPAR_THROW_EXCEPTION(caspar_exception() << msg_info("No graphics queue available"));
+        }
+
+        // Acquire the dedicated transfer queue eagerly so it shows up in
+        // diagnostics. Currently unused — uploads still flow through the
+        // renderer queue (see submitSingleTimeCommands). Migrating uploads
+        // to the transfer queue is a follow-up: it requires per-transfer
+        // queue-family ownership transfers via vulkan_queue::release_*_to /
+        // acquire_*_from and re-homing of the timeline _semaphore.
+        queue_request xfer_req{};
+        xfer_req.required_flags   = vk::QueueFlagBits::eTransfer;
+        xfer_req.forbidden_flags  = vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute;
+        xfer_req.prefer_exclusive = true;
+        xfer_req.label            = "internal-transfer";
+        _transfer_queue           = _queues->acquire_queue(xfer_req);
 
         vk::CommandPoolCreateInfo pool_info;
         pool_info.flags            = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
-        pool_info.queueFamilyIndex = queue_family;
+        pool_info.queueFamilyIndex = _renderer_queue->family_index();
 
         _command_pool = _device.createCommandPool(pool_info);
 
@@ -290,6 +326,14 @@ struct device::impl : public std::enable_shared_from_this<impl>
         for (auto& pipeline : _pipelines) {
             pipeline.reset();
         }
+
+        // Release queue handles before destroying the manager so the slot
+        // ref_counts drop to zero. Destroying the manager runs the pending
+        // semaphore deleters (vkDestroySemaphore) while _device is still
+        // valid.
+        _renderer_queue.reset();
+        _transfer_queue.reset();
+        _queues.reset();
 
         _device.destroy();
         vkb::destroy_instance(_vkb_instance);
@@ -383,7 +427,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
         submitInfo.setCommandBuffers(cmd_buffer);
         submitInfo.setSignalSemaphores(_semaphore);
         submitInfo.pNext = &timelineInfo;
-        _queue.submit(submitInfo);
+        _renderer_queue->submit(submitInfo);
 
         _transfer_cmd_buffers.push_back({cmd_buffer, signal_value});
 
@@ -395,7 +439,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
         return _device.allocateCommandBuffers(
             vk::CommandBufferAllocateInfo(_command_pool, vk::CommandBufferLevel::ePrimary, count));
     }
-    void submit(const vk::SubmitInfo& submitInfo, vk::Fence fence) { _queue.submit(submitInfo, fence); }
+    void submit(const vk::SubmitInfo& submitInfo, vk::Fence fence) { _renderer_queue->submit(submitInfo, fence); }
 
     std::shared_ptr<texture>
     create_attachment(int width, int height, common::bit_depth depth, uint32_t components_count)
@@ -739,6 +783,24 @@ struct device::impl : public std::enable_shared_from_this<impl>
         info.add(L"gl.summary.pooled_host_buffers.total_write_size", total_write_size);
         info.add_child(L"gl.summary.all_host_buffers", buffer::info());
 
+        boost::property_tree::wptree queue_families;
+        for (auto& f : _queues->queue_families()) {
+            boost::property_tree::wptree fam;
+            fam.add(L"family_index", f.family_index);
+            auto flags = vk::to_string(f.queue_flags);
+            fam.add(L"queue_flags", std::wstring(flags.begin(), flags.end()));
+            if (f.video_codec_ops) {
+                auto ops = vk::to_string(f.video_codec_ops);
+                fam.add(L"video_codec_ops", std::wstring(ops.begin(), ops.end()));
+            }
+            fam.add(L"queue_count", f.queue_count);
+            fam.add(L"queues_created", f.queues_created);
+            fam.add(L"queues_free", f.queues_free);
+            fam.add(L"timestamp_valid_bits", f.timestamp_valid_bits);
+            queue_families.add_child(L"queue_family", fam);
+        }
+        info.add_child(L"gl.details.queue_families", queue_families);
+
         return info;
     }
 
@@ -782,6 +844,10 @@ std::vector<vk::CommandBuffer>     device::allocateCommandBuffers(uint32_t count
 }
 void       device::submit(const vk::SubmitInfo& submitInfo, vk::Fence fence) { impl_->submit(submitInfo, fence); }
 vk::Device device::getVkDevice() const { return impl_->_device; }
+std::shared_ptr<vulkan_queue> device::acquire_queue(const queue_request& req)
+{
+    return impl_->_queues->acquire_queue(req);
+}
 std::shared_ptr<pipeline> device::get_pipeline(common::bit_depth depth)
 {
     return impl_->_pipelines[depth == common::bit_depth::bit8 ? 0 : 1];
