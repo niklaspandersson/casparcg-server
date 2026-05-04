@@ -77,11 +77,10 @@ void renderpass::draw(const draw_params& params)
         return;
     }
 
-    std::array<vk::ImageView, 7> textures = {attachment->view(),
-                                             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+    std::array<vk::ImageView, 7> textures = {attachment->view(), nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
 
     for (int n = 0; n < params.textures.size(); ++n) {
-        textures[1+n] = params.textures[n]->view();
+        textures[1 + n] = params.textures[n]->view();
     }
     if (params.local_key) {
         textures[5] = params.local_key->view();
@@ -89,6 +88,17 @@ void renderpass::draw(const draw_params& params)
     if (params.layer_key) {
         textures[6] = params.layer_key->view();
     }
+
+    // Retain every texture the draw samples so commit() can express the
+    // cross-queue read dependency on them. Same-queue tokens are filtered out at
+    // submit time, so it is safe to include attachments here too.
+    inputs_.push_back(attachment);
+    for (auto& t : params.textures)
+        inputs_.push_back(t);
+    if (params.local_key)
+        inputs_.push_back(params.local_key);
+    if (params.layer_key)
+        inputs_.push_back(params.layer_key);
 
     layers_.push_back({
         attachment,
@@ -212,7 +222,20 @@ void renderpass::commit()
     cmd_buffer.endRendering();
     cmd_buffer.end();
 
-    _ctx->submit();
+    // RAW: the draw must wait for the (cross-queue) writes of every texture it
+    // samples — e.g. transfer-queue uploads. command_context drops same-queue
+    // tokens, so this is a no-op for textures produced on the renderer queue.
+    std::vector<completion_token> waits;
+    waits.reserve(inputs_.size());
+    for (auto& t : inputs_)
+        waits.push_back(t->write_token());
+
+    auto token = _ctx->submit(waits);
+
+    // WAR: record this draw as a read on each sampled texture, so a later recycle
+    // (overwrite on another queue) waits for this draw to finish reading.
+    for (auto& t : inputs_)
+        t->note_read(token);
 }
 
 }}} // namespace caspar::accelerator::vulkan

@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include "completion_token.h"
+
 #include <accelerator/accelerator.h>
 #include <common/array.h>
 #include <common/bit_depth.h>
@@ -34,8 +36,10 @@
 namespace caspar { namespace accelerator { namespace vulkan {
 
 struct draw_params;
+struct queue_request;
 
 class image_kernel;
+class vulkan_queue;
 
 class device final
     : public std::enable_shared_from_this<device>
@@ -56,7 +60,20 @@ class device final
     vk::PhysicalDeviceMemoryProperties getMemoryProperties();
     std::vector<vk::CommandBuffer>     allocateCommandBuffers(uint32_t count);
     void                               submit(const vk::SubmitInfo& submitInfo, vk::Fence fence);
-    vk::Device                         getVkDevice() const;
+
+    // Submit an externally-recorded render command buffer on the renderer queue.
+    // Waits on the given cross-queue dependency tokens (e.g. upload write_tokens
+    // of the textures the draw samples), signals the renderer timeline + `fence`,
+    // and returns the draw's completion token (to stamp onto the sampled textures
+    // as their read dependency). See image_kernel.
+    completion_token
+    submit_render(vk::CommandBuffer cmd, vk::ArrayProxy<const completion_token> wait_tokens, vk::Fence fence);
+
+    vk::Device         getVkDevice() const;
+    vk::Instance       instance() const;
+    vk::PhysicalDevice physical_device() const;
+
+    std::shared_ptr<vulkan_queue> acquire_queue(const queue_request& req);
 
     std::shared_ptr<class texture>
     create_attachment(int width, int height, common::bit_depth depth, uint32_t components_count);

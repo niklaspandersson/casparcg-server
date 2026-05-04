@@ -38,6 +38,11 @@ struct texture::impl
     int               stride_ = 0;
     int               size_   = 0;
     common::bit_depth depth_;
+    vk::ImageLayout   current_layout_ = vk::ImageLayout::eUndefined;
+    uint32_t          owner_family_   = VK_QUEUE_FAMILY_IGNORED;
+
+    completion_token              write_token_;
+    std::vector<completion_token> read_tokens_; // one entry per reader queue/timeline
 
     impl(const impl&)            = delete;
     impl& operator=(const impl&) = delete;
@@ -102,5 +107,49 @@ common::bit_depth texture::depth() const { return impl_->depth_; }
 void              texture::set_depth(common::bit_depth depth) { impl_->depth_ = depth; }
 int               texture::size() const { return impl_->size_; }
 VkImage           texture::id() const { return impl_->image_; }
+
+vk::Image                 texture::image() const { return impl_->image_; }
+vk::ImageSubresourceRange texture::subresource_range() const
+{
+    return vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+}
+
+vk::ImageLayout texture::current_layout() const { return impl_->current_layout_; }
+void            texture::set_current_layout(vk::ImageLayout layout) { impl_->current_layout_ = layout; }
+uint32_t        texture::owner_family() const { return impl_->owner_family_; }
+void            texture::set_owner_family(uint32_t family_index) { impl_->owner_family_ = family_index; }
+
+const completion_token& texture::write_token() const { return impl_->write_token_; }
+
+void texture::note_write(const completion_token& token)
+{
+    impl_->write_token_ = token;
+    impl_->read_tokens_.clear();
+}
+
+void texture::note_read(const completion_token& token)
+{
+    if (!token)
+        return;
+
+    // Keep a single (highest) value per reader timeline.
+    for (auto& t : impl_->read_tokens_) {
+        if (t.timeline == token.timeline) {
+            if (token.value > t.value)
+                t = token;
+            return;
+        }
+    }
+    impl_->read_tokens_.push_back(token);
+}
+
+std::vector<completion_token> texture::read_dependencies() const
+{
+    if (!impl_->read_tokens_.empty())
+        return impl_->read_tokens_;
+    if (impl_->write_token_)
+        return {impl_->write_token_};
+    return {};
+}
 
 }}} // namespace caspar::accelerator::vulkan

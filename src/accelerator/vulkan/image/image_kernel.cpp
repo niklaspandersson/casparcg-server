@@ -100,22 +100,23 @@ struct image_kernel::impl
         {
         }
 
-        virtual vk::Buffer upload_vertex_data(const std::vector<float>& src)
+        virtual vk::Buffer upload_vertex_data(const std::vector<float>& src) override
         {
             return parent->upload_vertex_buffer(*this, (void*)src.data(), src.size() * sizeof(float));
         }
-        virtual draw_data create_draw_data(const draw_params& params) { return parent->draw(params); }
-        virtual std::shared_ptr<class pipeline> get_pipeline() { return parent->vulkan_->get_pipeline(parent->depth_); }
-        virtual vk::CommandBuffer               get_command_buffer() { return cmd_buffer; }
-        virtual void                            submit()
+        virtual draw_data create_draw_data(const draw_params& params) override { return parent->draw(params); }
+        virtual std::shared_ptr<class pipeline> get_pipeline() override
+        {
+            return parent->vulkan_->get_pipeline(parent->depth_);
+        }
+        virtual vk::CommandBuffer get_command_buffer() override { return cmd_buffer; }
+        completion_token          submit(vk::ArrayProxy<const completion_token> waits) override
         {
             fence = parent->vulkan_->getVkDevice().createFence({});
-            vk::SubmitInfo submitInfo{};
-            submitInfo.setCommandBuffers(cmd_buffer);
-            parent->vulkan_->submit(submitInfo, fence);
+            return parent->vulkan_->submit_render(cmd_buffer, waits, fence);
         }
         virtual std::shared_ptr<class texture>
-        create_attachment(uint32_t width, uint32_t height, uint32_t components_count)
+        create_attachment(uint32_t width, uint32_t height, uint32_t components_count) override
         {
             return parent->vulkan_->create_attachment(width, height, parent->depth_, components_count);
         }

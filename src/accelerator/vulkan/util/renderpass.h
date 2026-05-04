@@ -28,6 +28,7 @@
 #include <vector>
 #include <vulkan/vulkan.hpp>
 
+#include "completion_token.h"
 #include "draw_params.h"
 #include "uniform_block.h"
 
@@ -40,7 +41,9 @@ struct frame_context
     virtual draw_data                       create_draw_data(const draw_params& params)        = 0;
     virtual std::shared_ptr<class pipeline> get_pipeline()                                     = 0;
     virtual vk::CommandBuffer               get_command_buffer()                               = 0;
-    virtual void                            submit()                                           = 0;
+    // Submit the recorded draw, first waiting on the given cross-queue dependency
+    // tokens (the write_tokens of the sampled textures). Returns the draw's token.
+    virtual completion_token submit(vk::ArrayProxy<const completion_token> waits) = 0;
     virtual std::shared_ptr<class texture>
     create_attachment(uint32_t width, uint32_t height, uint32_t components_count) = 0;
 };
@@ -65,6 +68,11 @@ class renderpass
         uint32_t                                 vertex_buffer_offset = 0;
     };
     std::vector<layer_info> layers_;
+
+    // Every input texture sampled by the draw (content planes + background + key
+    // textures), retained so commit() can wait on their write_tokens and stamp
+    // the draw's token back onto them as a read dependency.
+    std::vector<std::shared_ptr<class texture>> inputs_;
 
   public:
     renderpass(frame_context* ctx, uint32_t width, uint32_t height);

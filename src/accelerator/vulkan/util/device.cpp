@@ -23,7 +23,9 @@
 
 #include "../image/image_kernel.h"
 #include "buffer.h"
+#include "command_context.h"
 #include "pipeline.h"
+#include "queue_manager.h"
 #include "texture.h"
 
 #include <common/array.h>
@@ -127,20 +129,24 @@ struct device::impl : public std::enable_shared_from_this<impl>
     vk::PhysicalDeviceMemoryProperties _memoryProperties;
     vk::PhysicalDevice                 _physical_device;
     vk::Device                         _device;
-    vk::Queue                          _queue;
-    vk::CommandPool                    _command_pool;
+    std::shared_ptr<queue_manager>     _queues;
+    std::shared_ptr<vulkan_queue>      _renderer_queue;
+    std::shared_ptr<vulkan_queue>      _transfer_queue; // null on hw without dedicated DMA family
     VmaAllocator                       _allocator;
 
     std::array<std::shared_ptr<pipeline>, 2> _pipelines;
 
-    struct inflight_command_buffer
-    {
-        vk::CommandBuffer cmd;
-        uint64_t          semaphore_value;
-    };
-    std::deque<inflight_command_buffer> _transfer_cmd_buffers;
-    vk::Semaphore                       _semaphore;
-    uint64_t                            _semaphore_value{0};
+    // Recording/submission engine bound to the renderer queue. Owns the command
+    // pool + timeline + recycled command buffers that used to live directly in
+    // this struct (see command_context).
+    std::unique_ptr<command_context> _render_ctx;
+
+    // Recording engine bound to the dedicated transfer queue, when the hardware
+    // exposes one. Host->device uploads run on it; the cross-queue dependency to
+    // the renderer is expressed with per-texture timeline tokens (the upload pool
+    // is CONCURRENT, so no queue-family ownership transfer is needed). Null on
+    // single-family hardware — uploads then fall back to _render_ctx.
+    std::unique_ptr<command_context> _transfer_ctx;
 
     io_context                             io_context_;
     decltype(make_work_guard(io_context_)) work_;
@@ -220,9 +226,20 @@ struct device::impl : public std::enable_shared_from_this<impl>
                 fn(_vkb_physical_device);
         }
 
-        // Create the logical device
-        auto device_builder = vkb::DeviceBuilder(_vkb_physical_device);
-        _physical_device    = vk::PhysicalDevice(_vkb_physical_device.physical_device);
+        _physical_device = vk::PhysicalDevice(_vkb_physical_device.physical_device);
+
+        // Plan queues before vkCreateDevice — Vulkan requires the full set of
+        // queues to be declared up front.
+        const bool video_queue_enabled = _vkb_physical_device.is_extension_present(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME);
+        _queues                        = std::make_shared<queue_manager>(_physical_device, video_queue_enabled);
+
+        auto                                     plans = _queues->plan();
+        std::vector<vkb::CustomQueueDescription> queue_descs;
+        queue_descs.reserve(plans.size());
+        for (auto& p : plans)
+            queue_descs.emplace_back(p.family_index, p.priorities);
+
+        auto device_builder = vkb::DeviceBuilder(_vkb_physical_device).custom_queue_setup(std::move(queue_descs));
 
         auto device_res = device_builder.build();
         if (!device_res) {
@@ -232,21 +249,33 @@ struct device::impl : public std::enable_shared_from_this<impl>
         auto vkb_device = device_res.value();
         _device         = vk::Device(vkb_device.device);
         VULKAN_HPP_DEFAULT_DISPATCHER.init(_device);
-        _queue            = vk::Queue(vkb_device.get_queue(vkb::QueueType::graphics).value());
-        auto queue_family = vkb_device.get_queue_index(vkb::QueueType::graphics).value();
 
-        vk::CommandPoolCreateInfo pool_info;
-        pool_info.flags            = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
-        pool_info.queueFamilyIndex = queue_family;
+        _queues->populate(_device);
 
-        _command_pool = _device.createCommandPool(pool_info);
+        queue_request gfx_req{};
+        gfx_req.required_flags   = vk::QueueFlagBits::eGraphics;
+        gfx_req.prefer_exclusive = true;
+        gfx_req.label            = "renderer";
+        _renderer_queue          = _queues->acquire_queue(gfx_req);
+        if (!_renderer_queue) {
+            CASPAR_THROW_EXCEPTION(caspar_exception() << msg_info("No graphics queue available"));
+        }
 
-        vk::SemaphoreTypeCreateInfo timeline_info{};
-        timeline_info.semaphoreType = vk::SemaphoreType::eTimeline;
-        timeline_info.initialValue  = 0;
-        vk::SemaphoreCreateInfo semaphore_info{};
-        semaphore_info.pNext = &timeline_info;
-        _semaphore           = _device.createSemaphore(semaphore_info);
+        // Acquire the dedicated transfer queue (DMA family). When present,
+        // host->device uploads run on it and the renderer samples the result
+        // after waiting on the upload's timeline token (see copy_async). Null on
+        // hardware without a dedicated transfer family — uploads then fall back
+        // to the renderer queue.
+        queue_request xfer_req{};
+        xfer_req.required_flags   = vk::QueueFlagBits::eTransfer;
+        xfer_req.forbidden_flags  = vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute;
+        xfer_req.prefer_exclusive = true;
+        xfer_req.label            = "internal-transfer";
+        _transfer_queue           = _queues->acquire_queue(xfer_req);
+
+        _render_ctx = std::make_unique<command_context>(_device, _renderer_queue);
+        if (_transfer_queue)
+            _transfer_ctx = std::make_unique<command_context>(_device, _transfer_queue);
 
         VmaVulkanFunctions vulkanFunctions    = {};
         vulkanFunctions.vkGetInstanceProcAddr = _vkb_instance.fp_vkGetInstanceProcAddr;
@@ -290,14 +319,24 @@ struct device::impl : public std::enable_shared_from_this<impl>
             for (auto& pool : pools)
                 pool.clear();
 
-        _transfer_cmd_buffers.clear();
-        _device.destroySemaphore(_semaphore);
+        // Destroy the recording engines (their command pools + timelines) now
+        // that the device is idle, but before releasing the queues they
+        // reference.
+        _transfer_ctx.reset();
+        _render_ctx.reset();
 
-        _device.destroyCommandPool(_command_pool);
         vmaDestroyAllocator(_allocator);
         for (auto& pipeline : _pipelines) {
             pipeline.reset();
         }
+
+        // Release queue handles before destroying the manager so the slot
+        // ref_counts drop to zero. Destroying the manager runs the pending
+        // semaphore deleters (vkDestroySemaphore) while _device is still
+        // valid.
+        _renderer_queue.reset();
+        _transfer_queue.reset();
+        _queues.reset();
 
         _device.destroy();
         vkb::destroy_instance(_vkb_instance);
@@ -355,55 +394,18 @@ struct device::impl : public std::enable_shared_from_this<impl>
         throw std::runtime_error("Failed to find suitable memory type");
     }
 
-    uint64_t submitSingleTimeCommands(std::function<void(const vk::CommandBuffer&)> func)
-    {
-        vk::CommandBuffer cmd_buffer = nullptr;
-        if (_transfer_cmd_buffers.size() > 1) {
-            auto completed = _device.getSemaphoreCounterValue(_semaphore);
-
-            // try to reuse the oldest existing command buffer
-            if (_transfer_cmd_buffers.front().semaphore_value <= completed) {
-                cmd_buffer = _transfer_cmd_buffers.front().cmd;
-                cmd_buffer.reset();
-                _transfer_cmd_buffers.pop_front();
-            }
-        }
-
-        if (!cmd_buffer) {
-            // create a new command buffer
-            vk::CommandBufferAllocateInfo allocInfo{};
-            allocInfo.commandPool        = _command_pool;
-            allocInfo.level              = vk::CommandBufferLevel::ePrimary;
-            allocInfo.commandBufferCount = 1;
-
-            cmd_buffer = _device.allocateCommandBuffers(allocInfo)[0];
-        }
-
-        cmd_buffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-        func(cmd_buffer);
-        cmd_buffer.end();
-
-        auto                            signal_value = ++_semaphore_value;
-        vk::TimelineSemaphoreSubmitInfo timelineInfo{};
-        timelineInfo.setSignalSemaphoreValues(signal_value);
-
-        vk::SubmitInfo submitInfo{};
-        submitInfo.setCommandBuffers(cmd_buffer);
-        submitInfo.setSignalSemaphores(_semaphore);
-        submitInfo.pNext = &timelineInfo;
-        _queue.submit(submitInfo);
-
-        _transfer_cmd_buffers.push_back({cmd_buffer, signal_value});
-
-        return signal_value;
-    }
-
     std::vector<vk::CommandBuffer> allocateCommandBuffers(uint32_t count)
     {
         return _device.allocateCommandBuffers(
-            vk::CommandBufferAllocateInfo(_command_pool, vk::CommandBufferLevel::ePrimary, count));
+            vk::CommandBufferAllocateInfo(_render_ctx->pool(), vk::CommandBufferLevel::ePrimary, count));
     }
-    void submit(const vk::SubmitInfo& submitInfo, vk::Fence fence) { _queue.submit(submitInfo, fence); }
+    void submit(const vk::SubmitInfo& submitInfo, vk::Fence fence) { _renderer_queue->submit(submitInfo, fence); }
+
+    completion_token
+    submit_render(vk::CommandBuffer cmd, vk::ArrayProxy<const completion_token> wait_tokens, vk::Fence fence)
+    {
+        return _render_ctx->submit_recorded(cmd, wait_tokens, fence);
+    }
 
     std::shared_ptr<texture>
     create_attachment(int width, int height, common::bit_depth depth, uint32_t components_count)
@@ -454,7 +456,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
                 width, height, components_count, depth, image, imageMemory, imageView, _device);
         }
 
-        submitSingleTimeCommands([&](vk::CommandBuffer cmd) {
+        _render_ctx->record_and_submit([&](vk::CommandBuffer cmd) {
             transitionImageLayout(
                 tex->id(),
                 vk::ImageLayout::eUndefined,
@@ -506,8 +508,23 @@ struct device::impl : public std::enable_shared_from_this<impl>
             imageInfo.samples       = vk::SampleCountFlagBits::e1;
             imageInfo.tiling        = vk::ImageTiling::eOptimal;
             imageInfo.usage         = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
-            imageInfo.sharingMode   = vk::SharingMode::eExclusive;
-            auto image              = _device.createImage(imageInfo);
+            // Upload textures are written by the transfer queue and sampled by
+            // the renderer queue. With a dedicated transfer family that means two
+            // families touch the image, so use CONCURRENT sharing — it removes
+            // queue-family ownership transfers entirely (the cross-queue ordering
+            // is expressed with timeline tokens instead). Single-family hardware
+            // keeps EXCLUSIVE.
+            std::array<uint32_t, 2> shared_families{};
+            if (_transfer_queue) {
+                shared_families[0]              = _renderer_queue->family_index();
+                shared_families[1]              = _transfer_queue->family_index();
+                imageInfo.sharingMode           = vk::SharingMode::eConcurrent;
+                imageInfo.queueFamilyIndexCount = 2;
+                imageInfo.pQueueFamilyIndices   = shared_families.data();
+            } else {
+                imageInfo.sharingMode = vk::SharingMode::eExclusive;
+            }
+            auto image = _device.createImage(imageInfo);
 
             auto memReq = _device.getImageMemoryRequirements(image);
 
@@ -584,7 +601,12 @@ struct device::impl : public std::enable_shared_from_this<impl>
                                        vk::Offset3D(0, 0, 0),
                                        vk::Extent3D(width, height, 1));
 
-            submitSingleTimeCommands([&](vk::CommandBuffer cmd) {
+            // Record the host->device upload: discard prior contents (UNDEFINED),
+            // copy, then leave the image ready for sampling. UNDEFINED means we
+            // never need to preserve the recycled image's old contents, so no
+            // queue-family ownership transfer is required even though the transfer
+            // and renderer queues differ (the pool's images are CONCURRENT).
+            auto record_upload = [&](vk::CommandBuffer cmd) {
                 transitionImageLayout(tex->id(),
                                       vk::ImageLayout::eUndefined,
                                       vk::AccessFlagBits2::eNone,
@@ -604,19 +626,37 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
                                       vk::ImageLayout::eShaderReadOnlyOptimal,
                                       vk::AccessFlagBits2::eShaderRead,
-                                      vk::PipelineStageFlagBits2::eFragmentShader,
+                                      vk::PipelineStageFlagBits2::eAllCommands,
                                       cmd);
-            });
+            };
 
-            // No need to wait here, GPU-GPU deps (the usage of this texture on the device) are enforced by the memory
-            // barriers
+            if (_transfer_ctx) {
+                // Write-after-read: the recycled image must not be overwritten
+                // until the renderer has finished reading the previous contents.
+                // read_dependencies() are the draw(s) that last sampled this image
+                // (cross-queue tokens); command_context turns them into timeline
+                // waits and drops any that are already same-queue. A fresh image
+                // has no dependencies, so the upload overlaps rendering freely.
+                auto token = _transfer_ctx->record_and_submit(record_upload, tex->read_dependencies());
+                tex->set_current_layout(vk::ImageLayout::eShaderReadOnlyOptimal);
+                tex->note_write(token);
+            } else {
+                // Single-family fallback: upload on the renderer queue.
+                auto token = _render_ctx->record_and_submit(record_upload, tex->read_dependencies());
+                tex->set_current_layout(vk::ImageLayout::eShaderReadOnlyOptimal);
+                tex->note_write(token);
+            }
+
+            // The cross-queue RAW dependency (renderer sampling waits for this
+            // upload) is expressed when the draw submits: it waits on this
+            // texture's write_token (see image_kernel / renderpass).
             return tex;
         });
     }
 
     std::future<array<const uint8_t>> copy_async(const std::shared_ptr<texture>& source)
     {
-        auto f = dispatch_async([this, source]() -> std::pair<std::shared_ptr<buffer>, uint64_t> {
+        auto f = dispatch_async([this, source]() -> std::pair<std::shared_ptr<buffer>, completion_token> {
             auto buf = create_buffer(source->size(), false);
 
             vk::CopyImageToBufferInfo2 copyInfo{};
@@ -632,7 +672,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
                 vk::Extent3D{static_cast<uint32_t>(source->width()), static_cast<uint32_t>(source->height()), 1};
             copyInfo.setRegions(region);
 
-            auto signal_value = submitSingleTimeCommands([&](vk::CommandBuffer cmd) {
+            auto token = _render_ctx->record_and_submit([&](vk::CommandBuffer cmd) {
                 transitionImageLayout(source->id(),
                                       vk::ImageLayout::eRenderingLocalRead,
                                       vk::AccessFlagBits2::eColorAttachmentWrite,
@@ -645,16 +685,12 @@ struct device::impl : public std::enable_shared_from_this<impl>
                 cmd.copyImageToBuffer2(copyInfo);
             });
 
-            return {buf, signal_value};
+            return {buf, token};
         });
 
         return std::async(std::launch::deferred, [this, f = std::move(f)]() mutable {
-            auto [buf, signal_value] = f.get();
-            vk::SemaphoreWaitInfo waitInfo{};
-            waitInfo.setSemaphores(_semaphore);
-            waitInfo.setValues(signal_value);
-            auto res = _device.waitSemaphores(waitInfo, 1000000000);
-            if (res != vk::Result::eSuccess) {
+            auto [buf, token] = f.get();
+            if (!_render_ctx->wait(token)) {
                 CASPAR_LOG(warning) << L"[Vulkan] Timeout waiting for readback semaphore";
             }
 
@@ -747,6 +783,24 @@ struct device::impl : public std::enable_shared_from_this<impl>
         info.add(L"gl.summary.pooled_host_buffers.total_write_size", total_write_size);
         info.add_child(L"gl.summary.all_host_buffers", buffer::info());
 
+        boost::property_tree::wptree queue_families;
+        for (auto& f : _queues->queue_families()) {
+            boost::property_tree::wptree fam;
+            fam.add(L"family_index", f.family_index);
+            auto flags = vk::to_string(f.queue_flags);
+            fam.add(L"queue_flags", std::wstring(flags.begin(), flags.end()));
+            if (f.video_codec_ops) {
+                auto ops = vk::to_string(f.video_codec_ops);
+                fam.add(L"video_codec_ops", std::wstring(ops.begin(), ops.end()));
+            }
+            fam.add(L"queue_count", f.queue_count);
+            fam.add(L"queues_created", f.queues_created);
+            fam.add(L"queues_free", f.queues_free);
+            fam.add(L"timestamp_valid_bits", f.timestamp_valid_bits);
+            queue_families.add_child(L"queue_family", fam);
+        }
+        info.add_child(L"gl.details.queue_families", queue_families);
+
         return info;
     }
 
@@ -788,8 +842,19 @@ std::vector<vk::CommandBuffer>     device::allocateCommandBuffers(uint32_t count
 {
     return impl_->allocateCommandBuffers(count);
 }
-void       device::submit(const vk::SubmitInfo& submitInfo, vk::Fence fence) { impl_->submit(submitInfo, fence); }
-vk::Device device::getVkDevice() const { return impl_->_device; }
+void device::submit(const vk::SubmitInfo& submitInfo, vk::Fence fence) { impl_->submit(submitInfo, fence); }
+completion_token
+device::submit_render(vk::CommandBuffer cmd, vk::ArrayProxy<const completion_token> wait_tokens, vk::Fence fence)
+{
+    return impl_->submit_render(cmd, wait_tokens, fence);
+}
+vk::Device                    device::getVkDevice() const { return impl_->_device; }
+vk::Instance                  device::instance() const { return vk::Instance(impl_->_vkb_instance.instance); }
+vk::PhysicalDevice            device::physical_device() const { return impl_->_physical_device; }
+std::shared_ptr<vulkan_queue> device::acquire_queue(const queue_request& req)
+{
+    return impl_->_queues->acquire_queue(req);
+}
 std::shared_ptr<pipeline> device::get_pipeline(common::bit_depth depth)
 {
     return impl_->_pipelines[depth == common::bit_depth::bit8 ? 0 : 1];
