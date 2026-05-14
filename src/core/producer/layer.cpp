@@ -159,6 +159,25 @@ struct layer::impl
             return draw_frame{};
         }
     }
+
+    bool wait_for_foreground(const video_field field, std::chrono::milliseconds timeout)
+    {
+        try {
+            // Resolve any pending follower swap so we wait on the active producer.
+            if (foreground_->following_producer() != core::frame_producer::empty() && field != video_field::b) {
+                foreground_ = foreground_->following_producer();
+            }
+            if (paused_) {
+                return true;
+            }
+            return foreground_->wait_for_frame(field, timeout);
+        } catch (...) {
+            CASPAR_LOG_CURRENT_EXCEPTION();
+            return false;
+        }
+    }
+
+    bool foreground_supports_deterministic_sync() const { return foreground_->supports_deterministic_sync(); }
 };
 
 layer::layer(const core::video_format_desc format_desc)
@@ -193,4 +212,12 @@ spl::shared_ptr<frame_producer> layer::foreground() const { return impl_->foregr
 spl::shared_ptr<frame_producer> layer::background() const { return impl_->background_; }
 bool                            layer::has_background() const { return impl_->background_ != frame_producer::empty(); }
 core::monitor::state            layer::state() const { return impl_->state_; }
+bool layer::wait_for_foreground(const video_field field, std::chrono::milliseconds timeout)
+{
+    return impl_->wait_for_foreground(field, timeout);
+}
+bool layer::foreground_supports_deterministic_sync() const
+{
+    return impl_->foreground_supports_deterministic_sync();
+}
 }} // namespace caspar::core

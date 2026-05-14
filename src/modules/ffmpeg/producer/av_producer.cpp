@@ -871,11 +871,18 @@ struct AVProducer::Impl
                 auto start    = start_.load();
                 auto duration = duration_.load();
 
-                start       = start != AV_NOPTS_VALUE ? start : 0;
-                auto end    = duration != AV_NOPTS_VALUE ? start + duration : INT64_MAX;
-                auto time   = frame.pts != AV_NOPTS_VALUE ? frame.pts + frame.duration : 0;
-                buffer_eof_ = (video_filter_.eof && audio_filter_.eof) ||
+                start         = start != AV_NOPTS_VALUE ? start : 0;
+                auto end      = duration != AV_NOPTS_VALUE ? start + duration : INT64_MAX;
+                auto time     = frame.pts != AV_NOPTS_VALUE ? frame.pts + frame.duration : 0;
+                bool prev_eof = buffer_eof_.load();
+                buffer_eof_   = (video_filter_.eof && audio_filter_.eof) ||
                               av_rescale_q(time, TIME_BASE_Q, format_tb_) >= av_rescale_q(end, TIME_BASE_Q, format_tb_);
+
+                if (!prev_eof && buffer_eof_.load()) {
+                    // Wake consumers blocked in wait_for_frame so they don't hang past EOF.
+                    boost::lock_guard<boost::mutex> lock(buffer_mutex_);
+                    buffer_cond_.notify_all();
+                }
 
                 if (buffer_eof_) {
                     if (loop_ && frame_count_ > 2) {
@@ -965,6 +972,8 @@ struct AVProducer::Impl
                 buffer_cond_.wait(buffer_lock, [&] { return buffer_.size() < buffer_capacity_; });
                 if (seek_ == AV_NOPTS_VALUE) {
                     buffer_.push_back(frame);
+                    // Wake any consumer blocked on wait_for_frame().
+                    buffer_cond_.notify_all();
                 }
             }
 
@@ -1016,6 +1025,18 @@ struct AVProducer::Impl
     {
         boost::lock_guard<boost::mutex> lock(buffer_mutex_);
         return !buffer_.empty() || frame_;
+    }
+
+    bool wait_for_frame(std::chrono::milliseconds timeout)
+    {
+        boost::unique_lock<boost::mutex> lock(buffer_mutex_);
+        if (!buffer_.empty() || frame_) {
+            return true;
+        }
+        const auto boost_timeout = boost::chrono::milliseconds(timeout.count());
+        return buffer_cond_.wait_for(lock, boost_timeout, [&] {
+            return !buffer_.empty() || frame_ || buffer_eof_.load();
+        });
     }
 
     core::draw_frame next_frame(const core::video_field field)
@@ -1301,6 +1322,8 @@ core::draw_frame AVProducer::next_frame(const core::video_field field) { return 
 core::draw_frame AVProducer::prev_frame(const core::video_field field) { return impl_->prev_frame(field); }
 
 bool AVProducer::is_ready() { return impl_->is_ready(); }
+
+bool AVProducer::wait_for_frame(std::chrono::milliseconds timeout) { return impl_->wait_for_frame(timeout); }
 
 AVProducer& AVProducer::seek(int64_t time)
 {

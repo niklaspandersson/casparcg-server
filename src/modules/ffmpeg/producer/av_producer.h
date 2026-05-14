@@ -6,6 +6,7 @@
 #include <core/monitor/monitor.h>
 #include <core/video_format.h>
 
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -31,6 +32,7 @@ class AVProducer
     core::draw_frame prev_frame(const core::video_field field);
     core::draw_frame next_frame(const core::video_field field);
     bool             is_ready();
+    bool             wait_for_frame(std::chrono::milliseconds timeout);
 
     AVProducer& seek(int64_t time);
     int64_t     time() const;

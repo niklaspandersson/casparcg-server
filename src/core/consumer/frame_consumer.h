@@ -60,6 +60,12 @@ class frame_consumer
     virtual std::wstring print() const = 0;
     virtual std::wstring name() const  = 0;
     virtual bool         has_synchronization_clock() const { return false; }
+
+    // True if this consumer can participate in deterministic frame sync, i.e. its `send`
+    // future will not become ready until the frame has been safely accepted (no drops)
+    // so the channel loop is throttled by the consumer's drain rate.
+    virtual bool supports_deterministic_sync() const { return false; }
+
     virtual int          index() const = 0;
 };
 

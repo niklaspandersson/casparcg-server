@@ -65,6 +65,13 @@ struct output::impl
 
     void add(int index, spl::shared_ptr<frame_consumer> consumer)
     {
+        if (channel_info_.deterministic && !consumer->supports_deterministic_sync()) {
+            CASPAR_THROW_EXCEPTION(user_error()
+                                   << msg_info(L"Cannot attach consumer that does not support deterministic sync to a "
+                                               L"deterministic channel: " +
+                                               consumer->print()));
+        }
+
         remove(index);
 
         consumer->initialize(format_desc_, channel_info_, index);
@@ -131,6 +138,12 @@ struct output::impl
         // If no frame is provided, this should only happen when the channel has no consumers.
         // Take a shortcut and perform the sleep to let the channel tick correctly.
         if (!input_frame1) {
+            if (channel_info_.deterministic) {
+                // In deterministic mode we never pace by wall-clock; the channel just spins
+                // through frames as fast as the producers/consumers allow.
+                time_.reset();
+                return;
+            }
             if (!time) {
                 time = std::chrono::high_resolution_clock::now();
             } else {
@@ -215,7 +228,7 @@ struct output::impl
         const auto needs_sync = std::all_of(
             consumers.begin(), consumers.end(), [](auto& p) { return !p.second->has_synchronization_clock(); });
 
-        if (needs_sync) {
+        if (needs_sync && !channel_info_.deterministic) {
             if (!time) {
                 time = std::chrono::high_resolution_clock::now();
             } else {

@@ -697,6 +697,8 @@ class html_producer : public core::frame_producer
         return false;
     }
 
+    bool supports_deterministic_sync() const override { return true; }
+
     core::draw_frame last_frame(const core::video_field field) override
     {
         if (client_ != nullptr) {

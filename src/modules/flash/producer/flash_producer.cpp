@@ -429,6 +429,7 @@ struct flash_producer : public core::frame_producer
     }
 
     bool is_ready() override { return !output_buffer_.empty() || last_frame_; }
+    bool supports_deterministic_sync() const override { return true; }
 
     std::future<std::wstring> call(const std::vector<std::wstring>& params) override
     {

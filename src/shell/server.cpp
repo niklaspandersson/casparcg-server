@@ -305,6 +305,8 @@ struct server::impl
             if (format_desc.format == video_format::invalid)
                 CASPAR_THROW_EXCEPTION(user_error() << msg_info(L"Invalid video-mode: " + format_desc_str));
 
+            auto deterministic = xml_channel.second.get(L"deterministic", false);
+
             auto weak_client = std::weak_ptr<osc::client>(osc_client_);
             auto channel_id  = static_cast<int>(channels_->size() + 1);
             auto depth       = color_depth == 16 ? common::bit_depth::bit16 : common::bit_depth::bit8;
@@ -314,6 +316,7 @@ struct server::impl
                 spl::make_shared<video_channel>(channel_id,
                                                 format_desc,
                                                 default_color_space,
+                                                deterministic,
                                                 accelerator_.create_image_mixer(channel_id, depth),
                                                 [channel_id, weak_client](core::monitor::state channel_state) {
                                                     monitor::state state;

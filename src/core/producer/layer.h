@@ -28,6 +28,8 @@
 
 #include <common/memory.h>
 
+#include <chrono>
+
 namespace caspar { namespace core {
 
 class layer final
@@ -52,6 +54,13 @@ class layer final
 
     draw_frame receive(const video_field field, int nb_samples);
     draw_frame receive_background(const video_field field, int nb_samples);
+
+    // Block until the foreground producer has a frame ready (deterministic mode).
+    // Returns true if a frame became available, false on timeout.
+    bool wait_for_foreground(const video_field field, std::chrono::milliseconds timeout);
+
+    // True if the foreground producer supports deterministic sync.
+    bool foreground_supports_deterministic_sync() const;
 
     core::monitor::state state() const;
 

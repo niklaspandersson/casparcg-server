@@ -102,13 +102,14 @@ struct video_channel::impl final
     impl(int                                       index,
          const core::video_format_desc&            format_desc,
          color_space                               default_color_space,
+         bool                                      deterministic,
          std::unique_ptr<image_mixer>              image_mixer,
          std::function<void(core::monitor::state)> tick)
-        : channel_info_(index, image_mixer->depth(), default_color_space)
+        : channel_info_(index, image_mixer->depth(), default_color_space, deterministic)
         , output_(graph_, format_desc, channel_info_)
         , image_mixer_(std::move(image_mixer))
         , mixer_(index, graph_, image_mixer_)
-        , stage_(std::make_shared<core::stage>(index, graph_, format_desc))
+        , stage_(std::make_shared<core::stage>(index, graph_, format_desc, deterministic))
         , tick_(std::move(tick))
     {
         graph_->set_color("produce-time", caspar::diagnostics::color(0.0f, 1.0f, 0.0f));
@@ -243,9 +244,10 @@ struct video_channel::impl final
 video_channel::video_channel(int                                       index,
                              const core::video_format_desc&            format_desc,
                              color_space                               default_color_space,
+                             bool                                      deterministic,
                              std::unique_ptr<image_mixer>              image_mixer,
                              std::function<void(core::monitor::state)> tick)
-    : impl_(new impl(index, format_desc, default_color_space, std::move(image_mixer), std::move(tick)))
+    : impl_(new impl(index, format_desc, default_color_space, deterministic, std::move(image_mixer), std::move(tick)))
 {
 }
 video_channel::~video_channel() {}

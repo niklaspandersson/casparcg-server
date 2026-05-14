@@ -74,6 +74,7 @@ class video_channel final
     explicit video_channel(int                                       index,
                            const video_format_desc&                  format_desc,
                            color_space                               default_color_space,
+                           bool                                      deterministic,
                            std::unique_ptr<image_mixer>              image_mixer,
                            std::function<void(core::monitor::state)> on_tick);
     ~video_channel();

@@ -128,6 +128,11 @@ class destroy_producer_proxy : public frame_producer
     draw_frame           first_frame(const core::video_field field) override { return producer_->first_frame(field); }
     core::monitor::state state() const override { return producer_->state(); }
     bool                 is_ready() override { return producer_->is_ready(); }
+    bool                 supports_deterministic_sync() const override { return producer_->supports_deterministic_sync(); }
+    bool                 wait_for_frame(const core::video_field field, std::chrono::milliseconds timeout) override
+    {
+        return producer_->wait_for_frame(field, timeout);
+    }
 };
 
 spl::shared_ptr<core::frame_producer> do_create_producer(const frame_producer_dependencies&     dependencies,
