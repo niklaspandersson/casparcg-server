@@ -136,6 +136,24 @@ class separated_producer : public frame_producer
     core::monitor::state state() const override { return state_; }
 
     bool is_ready() override { return key_producer_->is_ready() && fill_producer_->is_ready(); }
+
+    bool supports_deterministic_sync() const override
+    {
+        return key_producer_->supports_deterministic_sync() && fill_producer_->supports_deterministic_sync();
+    }
+
+    bool wait_for_frame(const core::video_field field, std::chrono::milliseconds timeout) override
+    {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        if (!fill_producer_->wait_for_frame(field, timeout)) {
+            return false;
+        }
+        const auto remaining = deadline - std::chrono::steady_clock::now();
+        if (remaining <= std::chrono::milliseconds::zero()) {
+            return key_producer_->is_ready();
+        }
+        return key_producer_->wait_for_frame(field, std::chrono::duration_cast<std::chrono::milliseconds>(remaining));
+    }
 };
 
 spl::shared_ptr<frame_producer> create_separated_producer(const spl::shared_ptr<frame_producer>& fill,

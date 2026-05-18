@@ -9,6 +9,7 @@ set(SOURCES
 		amcp/amcp_command_repository.cpp
 		amcp/amcp_args.cpp
 		amcp/amcp_command_repository_wrapper.cpp
+		amcp/virtual_channel_registry.cpp
 
 		osc/oscpack/OscOutboundPacketStream.cpp
 		osc/oscpack/OscPrintReceivedElements.cpp
@@ -34,6 +35,7 @@ set(HEADERS
 		amcp/amcp_shared.h
 		amcp/amcp_args.h
 		amcp/amcp_command_context.h
+		amcp/virtual_channel_registry.h
 
 		osc/oscpack/MessageMappingOscPacketListener.h
 		osc/oscpack/OscException.h

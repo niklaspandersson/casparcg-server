@@ -125,6 +125,13 @@ struct ffmpeg_producer : public core::frame_producer
 
     bool is_ready() override { return producer_->is_ready(); }
 
+    bool supports_deterministic_sync() const override { return true; }
+
+    bool wait_for_frame(const core::video_field field, std::chrono::milliseconds timeout) override
+    {
+        return producer_->wait_for_frame(timeout);
+    }
+
     std::future<std::wstring> call(const std::vector<std::wstring>& params) override
     {
         std::wstring result;

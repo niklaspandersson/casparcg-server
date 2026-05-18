@@ -68,6 +68,7 @@ class client_connection
 
     virtual void add_lifecycle_bound_object(const std::wstring& key, const std::shared_ptr<void>& lifecycle_bound) = 0;
     virtual std::shared_ptr<void> remove_lifecycle_bound_object(const std::wstring& key)                           = 0;
+    virtual std::shared_ptr<void> find_lifecycle_bound_object(const std::wstring& key) const                       = 0;
 };
 
 /**

@@ -111,6 +111,15 @@ class connection : public spl::enable_shared_from_this<connection>
                 return conn->remove_lifecycle_bound_object(key);
             return std::shared_ptr<void>();
         }
+
+        std::shared_ptr<void> find_lifecycle_bound_object(const std::wstring& key) const override
+        {
+            auto conn = connection_.lock();
+
+            if (conn)
+                return conn->find_lifecycle_bound_object(key);
+            return std::shared_ptr<void>();
+        }
     };
 
   public:
@@ -170,6 +179,16 @@ class connection : public spl::enable_shared_from_this<connection>
             auto result = acc->second;
             lifecycle_bound_objects_.erase(acc);
             return result;
+        }
+        return std::shared_ptr<void>();
+    }
+
+    std::shared_ptr<void> find_lifecycle_bound_object(const std::wstring& key) const
+    {
+        // thread-safe tbb_concurrent_hash_map
+        lifecycle_map_type::const_accessor acc;
+        if (lifecycle_bound_objects_.find(acc, key)) {
+            return acc->second;
         }
         return std::shared_ptr<void>();
     }

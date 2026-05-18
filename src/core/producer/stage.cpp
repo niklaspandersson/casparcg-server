@@ -36,6 +36,8 @@
 
 #include <boost/range/adaptors.hpp>
 
+#include <algorithm>
+#include <chrono>
 #include <functional>
 #include <future>
 #include <map>
@@ -51,6 +53,7 @@ struct stage::impl : public std::enable_shared_from_this<impl>
     std::map<int, layer>                layers_;
     std::map<int, tweened_transform>    tweens_;
     std::set<int>                       routeSources;
+    const bool                          deterministic_;
 
     mutable std::mutex      format_desc_mutex_;
     core::video_format_desc format_desc_;
@@ -109,11 +112,18 @@ struct stage::impl : public std::enable_shared_from_this<impl>
     }
 
   public:
-    impl(int channel_index, spl::shared_ptr<diagnostics::graph> graph, const core::video_format_desc& format_desc)
+    impl(int                                channel_index,
+         spl::shared_ptr<diagnostics::graph> graph,
+         const core::video_format_desc&      format_desc,
+         bool                                deterministic)
         : channel_index_(channel_index)
         , graph_(std::move(graph))
+        , deterministic_(deterministic)
         , format_desc_(format_desc)
     {
+        if (deterministic_) {
+            graph_->set_color("deterministic-stall", caspar::diagnostics::color(0.9f, 0.1f, 0.1f));
+        }
     }
 
     const stage_frames operator()(uint64_t                                     frame_number,
@@ -160,6 +170,47 @@ struct stage::impl : public std::enable_shared_from_this<impl>
                 // when running interlaced, both fields are be pulled at once.
                 // This will risk some stutter for freshly created producers, but it lets us tick at 25hz and avoids
                 // amcp changes starting on the second field
+
+                // In deterministic mode, wait for every sync-capable foreground producer to have a frame
+                // ready before pulling. Real-time producers (decklink, ndi, cross-channel routes, ...)
+                // are not waited on; they are sampled as-is. Same-channel routes are sorted to be
+                // received after their source layer in `layerVec`, so by the time we wait for them
+                // here their upstream foreground has already been pulled.
+                if (deterministic_) {
+                    // No wall-clock dependencies in deterministic mode: the wait must
+                    // succeed before we pull, or the layer would fall back to still
+                    // frames and the render would depend on producer warm-up timing.
+                    // The bound is a sanity check against a genuinely hung producer
+                    // (the channel thread is blocked inside this stage executor
+                    // invocation, so it cannot observe shutdown until we return).
+                    // Each sync-capable producer's wait_for_frame is expected to mean
+                    // "ready to deliver", not merely "buffer non-empty".
+                    const auto timeout = std::chrono::seconds(60);
+                    bool       stalled = false;
+                    for (auto& l : layerVec) {
+                        if (!l.second) {
+                            continue;
+                        }
+                        auto p = layers_.find(l.first);
+                        if (p == layers_.end()) {
+                            continue;
+                        }
+                        if (!p->second.foreground_supports_deterministic_sync()) {
+                            continue;
+                        }
+                        if (!p->second.wait_for_foreground(field1, std::chrono::duration_cast<std::chrono::milliseconds>(timeout))) {
+                            stalled = true;
+                        }
+                        if (is_interlaced) {
+                            if (!p->second.wait_for_foreground(video_field::b, std::chrono::duration_cast<std::chrono::milliseconds>(timeout))) {
+                                stalled = true;
+                            }
+                        }
+                    }
+                    if (stalled) {
+                        graph_->set_tag(diagnostics::tag_severity::WARNING, "deterministic-stall");
+                    }
+                }
 
                 for (auto& l : layerVec) {
                     auto p = layers_.find(l.first);
@@ -429,8 +480,11 @@ struct stage::impl : public std::enable_shared_from_this<impl>
     }
 };
 
-stage::stage(int channel_index, spl::shared_ptr<diagnostics::graph> graph, const core::video_format_desc& format_desc)
-    : impl_(new impl(channel_index, std::move(graph), format_desc))
+stage::stage(int                                 channel_index,
+             spl::shared_ptr<diagnostics::graph> graph,
+             const core::video_format_desc&      format_desc,
+             bool                                deterministic)
+    : impl_(new impl(channel_index, std::move(graph), format_desc, deterministic))
 {
 }
 std::future<std::wstring> stage::call(int index, const std::vector<std::wstring>& params)

@@ -74,6 +74,7 @@ class video_channel final
     explicit video_channel(int                                       index,
                            const video_format_desc&                  format_desc,
                            color_space                               default_color_space,
+                           bool                                      deterministic,
                            std::unique_ptr<image_mixer>              image_mixer,
                            std::function<void(core::monitor::state)> on_tick);
     ~video_channel();
@@ -94,6 +95,8 @@ class video_channel final
     [[nodiscard]] channel_info get_consumer_channel_info() const;
 
     std::shared_ptr<core::route> route(int index = -1, route_mode mode = route_mode::foreground);
+
+    void schedule_at(uint64_t frame_number, std::function<void()> action);
 
   private:
     struct impl;

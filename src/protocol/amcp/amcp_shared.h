@@ -33,17 +33,20 @@ struct command_context_simple
     const int                       channel_index;
     const int                       layer_id;
     const std::vector<std::wstring> parameters;
+    const bool                      is_virtual_channel;
 
     int layer_index(int default_ = 0) const { return layer_id == -1 ? default_ : layer_id; }
 
     command_context_simple(IO::ClientInfoPtr                client,
                            int                              channel_index,
                            int                              layer_id,
-                           const std::vector<std::wstring>& parameters)
+                           const std::vector<std::wstring>& parameters,
+                           bool                             is_virtual_channel = false)
         : client(std::move(client))
         , channel_index(channel_index)
         , layer_id(layer_id)
         , parameters(parameters)
+        , is_virtual_channel(is_virtual_channel)
     {
     }
 };

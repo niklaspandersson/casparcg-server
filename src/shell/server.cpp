@@ -48,6 +48,7 @@
 #include <protocol/amcp/AMCPProtocolStrategy.h>
 #include <protocol/amcp/amcp_command_repository.h>
 #include <protocol/amcp/amcp_shared.h>
+#include <protocol/amcp/virtual_channel_registry.h>
 #include <protocol/osc/client.h>
 #include <protocol/util/AsyncEventServer.h>
 #include <protocol/util/strategy_adapters.h>
@@ -104,6 +105,7 @@ struct server::impl
     std::shared_ptr<amcp::amcp_command_repository>         amcp_command_repo_;
     std::shared_ptr<amcp::amcp_command_repository_wrapper> amcp_command_repo_wrapper_;
     std::shared_ptr<amcp::command_context_factory>         amcp_context_factory_;
+    std::shared_ptr<amcp::virtual_channel_registry>        virtual_channels_;
     std::vector<spl::shared_ptr<IO::AsyncEventServer>>     async_servers_;
     std::shared_ptr<IO::AsyncEventServer>                  primary_amcp_server_;
     std::shared_ptr<osc::client>                           osc_client_ = std::make_shared<osc::client>(io_context_);
@@ -172,6 +174,10 @@ struct server::impl
 
         destroy_producers_synchronously();
         destroy_consumers_synchronously();
+        // Both virtual and physical channels must be torn down AFTER the sync flags
+        // are flipped, so each channel's consumers (file writers etc.) finalise on the
+        // shutting-down thread rather than on detached threads that might outlive main().
+        virtual_channels_.reset();
         channels_->clear();
 
         while (weak_io_context.lock())
@@ -305,6 +311,8 @@ struct server::impl
             if (format_desc.format == video_format::invalid)
                 CASPAR_THROW_EXCEPTION(user_error() << msg_info(L"Invalid video-mode: " + format_desc_str));
 
+            auto deterministic = xml_channel.second.get(L"deterministic", false);
+
             auto weak_client = std::weak_ptr<osc::client>(osc_client_);
             auto channel_id  = static_cast<int>(channels_->size() + 1);
             auto depth       = color_depth == 16 ? common::bit_depth::bit16 : common::bit_depth::bit8;
@@ -314,6 +322,7 @@ struct server::impl
                 spl::make_shared<video_channel>(channel_id,
                                                 format_desc,
                                                 default_color_space,
+                                                deterministic,
                                                 accelerator_.create_image_mixer(channel_id, depth),
                                                 [channel_id, weak_client](core::monitor::state channel_state) {
                                                     monitor::state state;
@@ -436,6 +445,33 @@ struct server::impl
     {
         amcp_command_repo_ = std::make_shared<amcp::amcp_command_repository>(channels_);
 
+        virtual_channels_ = std::make_shared<amcp::virtual_channel_registry>(
+            [this](int                            virtual_id,
+                   const core::video_format_desc& format_desc,
+                   core::color_space              cs,
+                   common::bit_depth              depth) -> amcp::channel_context {
+                auto channel = spl::make_shared<video_channel>(virtual_id,
+                                                               format_desc,
+                                                               cs,
+                                                               /*deterministic*/ true,
+                                                               accelerator_.create_image_mixer(virtual_id, depth),
+                                                               [](core::monitor::state) {});
+
+                // If the (only) consumer on this virtual channel errors out during send(),
+                // the render is over and the channel is orphaned. Tear it down from a detached
+                // thread so ~video_channel does not self-join the channel's own tick thread.
+                std::weak_ptr<amcp::virtual_channel_registry> registry_weak = virtual_channels_;
+                channel->output().set_on_consumer_error([virtual_id, registry_weak](int) {
+                    std::thread([virtual_id, registry_weak]() {
+                        if (auto r = registry_weak.lock())
+                            r->destroy(virtual_id);
+                    }).detach();
+                });
+
+                const std::wstring lifecycle_key = L"lock-virtual-" + std::to_wstring(virtual_id);
+                return amcp::channel_context(channel, channel->stage(), lifecycle_key);
+            });
+
         auto accelerator_device = accelerator_.get_device();
         auto ctx                = std::make_shared<amcp::amcp_command_static_context>(
             video_format_repository_,
@@ -443,6 +479,7 @@ struct server::impl
             producer_registry_,
             consumer_registry_,
             amcp_command_repo_,
+            virtual_channels_,
             shutdown_server_now_,
             u8(caspar::env::properties().get(L"configuration.amcp.media-server.host", L"127.0.0.1")),
             u8(caspar::env::properties().get(L"configuration.amcp.media-server.port", L"8000")),

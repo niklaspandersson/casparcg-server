@@ -108,6 +108,7 @@ class color_producer : public frame_producer
     core::monitor::state state() const override { return state_; }
 
     bool is_ready() override { return true; }
+    bool supports_deterministic_sync() const override { return true; }
 };
 
 std::wstring get_hex_color(const std::wstring& str)

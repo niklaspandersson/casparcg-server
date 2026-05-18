@@ -27,6 +27,7 @@
 #include <common/memory.h>
 #include <core/video_format.h>
 
+#include <functional>
 #include <memory>
 
 namespace caspar::diagnostics {
@@ -57,6 +58,9 @@ class output final
     std::future<bool> call(int index, const std::vector<std::wstring>& params);
 
     size_t consumer_count() const;
+
+    void set_on_consumers_changed(std::function<void()> callback);
+    void set_on_consumer_error(std::function<void(int port_index)> callback);
 
     core::monitor::state state() const;
 

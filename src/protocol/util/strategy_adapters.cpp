@@ -91,6 +91,10 @@ class from_unicode_client_connection : public client_connection<wchar_t>
     {
         return client_->remove_lifecycle_bound_object(key);
     }
+    std::shared_ptr<void> find_lifecycle_bound_object(const std::wstring& key) const override
+    {
+        return client_->find_lifecycle_bound_object(key);
+    }
 };
 
 to_unicode_adapter_factory::to_unicode_adapter_factory(

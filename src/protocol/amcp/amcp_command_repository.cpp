@@ -36,12 +36,14 @@ AMCPCommand::ptr_type make_cmd(amcp_command_func        func,
                                const std::wstring&      name,
                                const std::wstring&      id,
                                IO::ClientInfoPtr        client,
-                               unsigned int             channel_index,
+                               int                      channel_index,
                                int                      layer_index,
+                               bool                     is_virtual_channel,
                                std::list<std::wstring>& tokens)
 {
     const std::vector<std::wstring> parameters(tokens.begin(), tokens.end());
-    const command_context_simple    ctx(std::move(client), channel_index, layer_index, std::move(parameters));
+    const command_context_simple    ctx(
+        std::move(client), channel_index, layer_index, std::move(parameters), is_virtual_channel);
 
     return std::make_shared<AMCPCommand>(ctx, func, name, id);
 }
@@ -52,6 +54,7 @@ AMCPCommand::ptr_type find_command(const std::map<std::wstring, std::pair<amcp_c
                                    IO::ClientInfoPtr                                                client,
                                    int                                                              channel_index,
                                    int                                                              layer_index,
+                                   bool                                                             is_virtual_channel,
                                    std::list<std::wstring>&                                         tokens)
 {
     std::wstring subcommand;
@@ -68,8 +71,14 @@ AMCPCommand::ptr_type find_command(const std::map<std::wstring, std::pair<amcp_c
             tokens.pop_front();
 
             if (tokens.size() >= subcmd->second.second) {
-                return make_cmd(
-                    subcmd->second.first, fullname, request_id, std::move(client), channel_index, layer_index, tokens);
+                return make_cmd(subcmd->second.first,
+                                fullname,
+                                request_id,
+                                std::move(client),
+                                channel_index,
+                                layer_index,
+                                is_virtual_channel,
+                                tokens);
             }
         }
     }
@@ -78,7 +87,14 @@ AMCPCommand::ptr_type find_command(const std::map<std::wstring, std::pair<amcp_c
     const auto command = commands.find(name);
 
     if (command != commands.end() && tokens.size() >= command->second.second) {
-        return make_cmd(command->second.first, name, request_id, std::move(client), channel_index, layer_index, tokens);
+        return make_cmd(command->second.first,
+                        name,
+                        request_id,
+                        std::move(client),
+                        channel_index,
+                        layer_index,
+                        is_virtual_channel,
+                        tokens);
     }
 
     return nullptr;
@@ -96,14 +112,33 @@ bool try_lexical_cast(const In& input, Out& result)
     return success;
 }
 
-static void
-parse_channel_id(std::list<std::wstring>& tokens, std::wstring& channel_spec, int& channel_index, int& layer_index)
+static void parse_channel_id(std::list<std::wstring>& tokens,
+                             std::wstring&            channel_spec,
+                             int&                     channel_index,
+                             int&                     layer_index,
+                             bool&                    is_virtual_channel)
 {
+    is_virtual_channel = false;
+
     if (!tokens.empty()) {
         channel_spec                            = tokens.front();
         std::wstring              channelid_str = boost::trim_copy(channel_spec);
         std::vector<std::wstring> split;
         boost::split(split, channelid_str, boost::is_any_of("-"));
+
+        // Virtual channel spec: $<id> or $<id>-<layer>
+        if (!split[0].empty() && split[0][0] == L'$') {
+            const std::wstring id_str = split[0].substr(1);
+            if (try_lexical_cast(id_str, channel_index)) {
+                is_virtual_channel = true;
+
+                if (split.size() > 1)
+                    try_lexical_cast(split[1], layer_index);
+
+                tokens.pop_front();
+            }
+            return;
+        }
 
         // Use non_throwing lexical cast to not hit exception break point all the time.
         if (try_lexical_cast(split[0], channel_index)) {
@@ -135,7 +170,7 @@ struct amcp_command_repository::impl
                                          IO::ClientInfoPtr        client,
                                          std::list<std::wstring>& tokens) const
     {
-        auto command = find_command(commands, name, id, std::move(client), -1, -1, tokens);
+        auto command = find_command(commands, name, id, std::move(client), -1, -1, false, tokens);
 
         if (command)
             return command;
@@ -146,14 +181,18 @@ struct amcp_command_repository::impl
     AMCPCommand::ptr_type create_channel_command(const std::wstring&      name,
                                                  const std::wstring&      id,
                                                  IO::ClientInfoPtr        client,
-                                                 unsigned int             channel_index,
+                                                 int                      channel_index,
                                                  int                      layer_index,
+                                                 bool                     is_virtual_channel,
                                                  std::list<std::wstring>& tokens) const
     {
-        if (channels_->size() <= channel_index)
+        // Physical channels are bounds-checked here; virtual channels are resolved at execution
+        // time via the virtual_channel_registry, so we don't need (and can't perform) a check here.
+        if (!is_virtual_channel && (channel_index < 0 || channels_->size() <= static_cast<size_t>(channel_index)))
             return nullptr;
 
-        auto command = find_command(channel_commands, name, id, std::move(client), channel_index, layer_index, tokens);
+        auto command = find_command(
+            channel_commands, name, id, std::move(client), channel_index, layer_index, is_virtual_channel, tokens);
 
         if (command)
             return command;
@@ -169,15 +208,17 @@ struct amcp_command_repository::impl
         tokens.pop_front();
 
         // Determine whether the next parameter is a channel spec or not
-        int          channel_index = -1;
-        int          layer_index   = -1;
+        int          channel_index      = -1;
+        int          layer_index        = -1;
+        bool         is_virtual_channel = false;
         std::wstring channel_spec;
-        parse_channel_id(tokens, channel_spec, channel_index, layer_index);
+        parse_channel_id(tokens, channel_spec, channel_index, layer_index, is_virtual_channel);
 
         // Create command instance
         std::shared_ptr<AMCPCommand> command;
         if (channel_index >= 0) {
-            command = create_channel_command(command_name, request_id, client, channel_index, layer_index, tokens);
+            command = create_channel_command(
+                command_name, request_id, client, channel_index, layer_index, is_virtual_channel, tokens);
 
             if (!command) // Might be a non channel command, although the first argument is numeric
             {

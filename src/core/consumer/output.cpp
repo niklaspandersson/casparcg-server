@@ -32,6 +32,7 @@
 #include <common/memory.h>
 
 #include <chrono>
+#include <functional>
 #include <map>
 #include <optional>
 #include <thread>
@@ -51,6 +52,9 @@ struct output::impl
     std::mutex                                     consumers_mutex_;
     std::map<int, spl::shared_ptr<frame_consumer>> consumers_;
 
+    std::function<void()>             on_consumers_changed_;
+    std::function<void(int port_idx)> on_consumer_error_;
+
     std::optional<time_point_t> time_;
 
   public:
@@ -65,21 +69,38 @@ struct output::impl
 
     void add(int index, spl::shared_ptr<frame_consumer> consumer)
     {
+        if (channel_info_.deterministic && !consumer->supports_deterministic_sync()) {
+            CASPAR_THROW_EXCEPTION(user_error()
+                                   << msg_info(L"Cannot attach consumer that does not support deterministic sync to a "
+                                               L"deterministic channel: " +
+                                               consumer->print()));
+        }
+
         remove(index);
 
         consumer->initialize(format_desc_, channel_info_, index);
 
-        std::lock_guard<std::mutex> lock(consumers_mutex_);
-        consumers_.emplace(index, std::move(consumer));
+        {
+            std::lock_guard<std::mutex> lock(consumers_mutex_);
+            consumers_.emplace(index, std::move(consumer));
+        }
+
+        if (on_consumers_changed_)
+            on_consumers_changed_();
     }
 
     void add(const spl::shared_ptr<frame_consumer>& consumer) { add(consumer->index(), consumer); }
 
     bool remove(int index)
     {
-        std::lock_guard<std::mutex> lock(consumers_mutex_);
-        auto                        count = consumers_.erase(index);
-        return count > 0;
+        bool changed;
+        {
+            std::lock_guard<std::mutex> lock(consumers_mutex_);
+            changed = consumers_.erase(index) > 0;
+        }
+        if (changed && on_consumers_changed_)
+            on_consumers_changed_();
+        return changed;
     }
 
     bool remove(const spl::shared_ptr<frame_consumer>& consumer) { return remove(consumer->index()); }
@@ -106,6 +127,9 @@ struct output::impl
         return consumers_.size();
     }
 
+    void set_on_consumers_changed(std::function<void()> callback) { on_consumers_changed_ = std::move(callback); }
+    void set_on_consumer_error(std::function<void(int)> callback) { on_consumer_error_ = std::move(callback); }
+
     void operator()(const const_frame&             input_frame1,
                     const const_frame&             input_frame2,
                     const core::video_format_desc& format_desc)
@@ -131,6 +155,12 @@ struct output::impl
         // If no frame is provided, this should only happen when the channel has no consumers.
         // Take a shortcut and perform the sleep to let the channel tick correctly.
         if (!input_frame1) {
+            if (channel_info_.deterministic) {
+                // In deterministic mode we never pace by wall-clock; the channel just spins
+                // through frames as fast as the producers/consumers allow.
+                time_.reset();
+                return;
+            }
             if (!time) {
                 time = std::chrono::high_resolution_clock::now();
             } else {
@@ -163,7 +193,19 @@ struct output::impl
             consumers = consumers_;
         }
 
-        auto do_send = [this, &consumers](core::video_field field, const core::const_frame& frame) {
+        auto drop_consumer = [this, &consumers](int index) {
+            consumers.erase(index);
+            {
+                std::lock_guard<std::mutex> lock(consumers_mutex_);
+                consumers_.erase(index);
+            }
+            if (on_consumer_error_)
+                on_consumer_error_(index);
+            if (on_consumers_changed_)
+                on_consumers_changed_();
+        };
+
+        auto do_send = [&](core::video_field field, const core::const_frame& frame) {
             std::map<int, std::future<bool>> futures;
 
             for (auto it = consumers.begin(); it != consumers.end();) {
@@ -174,26 +216,25 @@ struct output::impl
                     CASPAR_LOG_CURRENT_EXCEPTION();
                     auto index = it->first;
                     it         = consumers.erase(it);
-
-                    std::lock_guard<std::mutex> lock(consumers_mutex_);
-                    consumers_.erase(index);
+                    {
+                        std::lock_guard<std::mutex> lock(consumers_mutex_);
+                        consumers_.erase(index);
+                    }
+                    if (on_consumer_error_)
+                        on_consumer_error_(index);
+                    if (on_consumers_changed_)
+                        on_consumers_changed_();
                 }
             }
 
             for (auto& p : futures) {
                 try {
                     if (!p.second.get()) {
-                        consumers.erase(p.first);
-
-                        std::lock_guard<std::mutex> lock(consumers_mutex_);
-                        consumers_.erase(p.first);
+                        drop_consumer(p.first);
                     }
                 } catch (...) {
                     CASPAR_LOG_CURRENT_EXCEPTION();
-                    consumers.erase(p.first);
-
-                    std::lock_guard<std::mutex> lock(consumers_mutex_);
-                    consumers_.erase(p.first);
+                    drop_consumer(p.first);
                 }
             }
         };
@@ -215,7 +256,7 @@ struct output::impl
         const auto needs_sync = std::all_of(
             consumers.begin(), consumers.end(), [](auto& p) { return !p.second->has_synchronization_clock(); });
 
-        if (needs_sync) {
+        if (needs_sync && !channel_info_.deterministic) {
             if (!time) {
                 time = std::chrono::high_resolution_clock::now();
             } else {
@@ -246,6 +287,14 @@ std::future<bool> output::call(int index, const std::vector<std::wstring>& param
     return impl_->call(index, params);
 }
 size_t output::consumer_count() const { return impl_->consumer_count(); }
+void   output::set_on_consumers_changed(std::function<void()> callback)
+{
+    impl_->set_on_consumers_changed(std::move(callback));
+}
+void output::set_on_consumer_error(std::function<void(int)> callback)
+{
+    impl_->set_on_consumer_error(std::move(callback));
+}
 void   output::operator()(const const_frame& frame, const const_frame& frame2, const video_format_desc& format_desc)
 {
     return (*impl_)(frame, frame2, format_desc);

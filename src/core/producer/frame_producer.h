@@ -30,11 +30,13 @@
 #include <core/frame/draw_frame.h>
 #include <core/video_format.h>
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <future>
 #include <optional>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <vector>
 
@@ -112,6 +114,34 @@ class frame_producer
      * While this returns false, the previous producer will be left running for a limited number of frames.
      */
     virtual bool is_ready() = 0;
+
+    /**
+     * True if this producer can participate in deterministic frame sync. Producers that are
+     * driven by an external clock (decklink, ndi, cross-channel routes) must return false.
+     * Producers that can be paced by us pulling them (file, image, color, ...) return true.
+     */
+    virtual bool supports_deterministic_sync() const { return false; }
+
+    /**
+     * Block until the next frame is available, or `timeout` elapses.
+     * Returns true if a frame is ready, false on timeout. Default implementation polls
+     * `is_ready()`. Sync-capable producers should override with a condvar-based wait so the
+     * channel does not spin while waiting for a real-time producer to catch up.
+     */
+    virtual bool wait_for_frame(const video_field field, std::chrono::milliseconds timeout)
+    {
+        if (is_ready()) {
+            return true;
+        }
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            if (is_ready()) {
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
 class const_producer : public core::frame_producer
@@ -151,6 +181,7 @@ class const_producer : public core::frame_producer
     }
 
     bool is_ready() override { return true; }
+    bool supports_deterministic_sync() const override { return true; }
 };
 
 class frame_producer_registry;

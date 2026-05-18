@@ -871,11 +871,18 @@ struct AVProducer::Impl
                 auto start    = start_.load();
                 auto duration = duration_.load();
 
-                start       = start != AV_NOPTS_VALUE ? start : 0;
-                auto end    = duration != AV_NOPTS_VALUE ? start + duration : INT64_MAX;
-                auto time   = frame.pts != AV_NOPTS_VALUE ? frame.pts + frame.duration : 0;
-                buffer_eof_ = (video_filter_.eof && audio_filter_.eof) ||
+                start         = start != AV_NOPTS_VALUE ? start : 0;
+                auto end      = duration != AV_NOPTS_VALUE ? start + duration : INT64_MAX;
+                auto time     = frame.pts != AV_NOPTS_VALUE ? frame.pts + frame.duration : 0;
+                bool prev_eof = buffer_eof_.load();
+                buffer_eof_   = (video_filter_.eof && audio_filter_.eof) ||
                               av_rescale_q(time, TIME_BASE_Q, format_tb_) >= av_rescale_q(end, TIME_BASE_Q, format_tb_);
+
+                if (!prev_eof && buffer_eof_.load()) {
+                    // Wake consumers blocked in wait_for_frame so they don't hang past EOF.
+                    boost::lock_guard<boost::mutex> lock(buffer_mutex_);
+                    buffer_cond_.notify_all();
+                }
 
                 if (buffer_eof_) {
                     if (loop_ && frame_count_ > 2) {
@@ -965,6 +972,8 @@ struct AVProducer::Impl
                 buffer_cond_.wait(buffer_lock, [&] { return buffer_.size() < buffer_capacity_; });
                 if (seek_ == AV_NOPTS_VALUE) {
                     buffer_.push_back(frame);
+                    // Wake any consumer blocked on wait_for_frame().
+                    buffer_cond_.notify_all();
                 }
             }
 
@@ -1016,6 +1025,35 @@ struct AVProducer::Impl
     {
         boost::lock_guard<boost::mutex> lock(buffer_mutex_);
         return !buffer_.empty() || frame_;
+    }
+
+    bool wait_for_frame(std::chrono::milliseconds timeout)
+    {
+        // Wait until `next_frame()` will actually deliver. Two conditions must match
+        // next_frame's underflow check (see this file's next_frame): the buffer must
+        // be non-empty, and on the first delivery after construction or a seek
+        // (frame_flush_ == true) we need at least 4 frames queued — otherwise
+        // next_frame returns an empty draw_frame and the layer falls back to
+        // prev_frame, which peeks buffer[0] without popping. That peek-then-pop
+        // pattern delivers frame 0 twice and lags every subsequent frame by one
+        // tick — invisible at wall-clock pacing but a determinism bug in render
+        // mode. `frame_` (the last delivered frame) must not satisfy this wait;
+        // once set it would turn the wait into a no-op.
+        boost::unique_lock<boost::mutex> lock(buffer_mutex_);
+        auto ready = [&] {
+            if (buffer_eof_.load()) {
+                return true;
+            }
+            if (buffer_.empty()) {
+                return false;
+            }
+            return !frame_flush_ || buffer_.size() >= 4;
+        };
+        if (ready()) {
+            return true;
+        }
+        const auto boost_timeout = boost::chrono::milliseconds(timeout.count());
+        return buffer_cond_.wait_for(lock, boost_timeout, ready);
     }
 
     core::draw_frame next_frame(const core::video_field field)
@@ -1301,6 +1339,8 @@ core::draw_frame AVProducer::next_frame(const core::video_field field) { return 
 core::draw_frame AVProducer::prev_frame(const core::video_field field) { return impl_->prev_frame(field); }
 
 bool AVProducer::is_ready() { return impl_->is_ready(); }
+
+bool AVProducer::wait_for_frame(std::chrono::milliseconds timeout) { return impl_->wait_for_frame(timeout); }
 
 AVProducer& AVProducer::seek(int64_t time)
 {

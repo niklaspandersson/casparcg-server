@@ -22,7 +22,9 @@
 #pragma once
 
 #include <iostream>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "protocol_strategy.h"
@@ -35,16 +37,36 @@ typedef std::shared_ptr<client_connection<wchar_t>> ClientInfoPtrStd;
 
 struct ConsoleClientInfo : public client_connection<wchar_t>
 {
+    mutable std::mutex                            lifecycle_mutex_;
+    std::map<std::wstring, std::shared_ptr<void>> lifecycle_objects_;
+
     void send(std::wstring&& data, bool skip_log) override
     {
         std::wcout << L"#" + caspar::log::replace_nonprintable_copy(data, L'?') << std::flush;
     }
     void         disconnect() override {}
     std::wstring address() const override { return L"Console"; }
-    void add_lifecycle_bound_object(const std::wstring& key, const std::shared_ptr<void>& lifecycle_bound) override {}
+
+    void add_lifecycle_bound_object(const std::wstring& key, const std::shared_ptr<void>& lifecycle_bound) override
+    {
+        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        lifecycle_objects_[key] = lifecycle_bound;
+    }
     std::shared_ptr<void> remove_lifecycle_bound_object(const std::wstring& key) override
     {
-        return std::shared_ptr<void>();
+        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        auto                        it = lifecycle_objects_.find(key);
+        if (it == lifecycle_objects_.end())
+            return {};
+        auto val = it->second;
+        lifecycle_objects_.erase(it);
+        return val;
+    }
+    std::shared_ptr<void> find_lifecycle_bound_object(const std::wstring& key) const override
+    {
+        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        auto                        it = lifecycle_objects_.find(key);
+        return it == lifecycle_objects_.end() ? std::shared_ptr<void>() : it->second;
     }
 };
 

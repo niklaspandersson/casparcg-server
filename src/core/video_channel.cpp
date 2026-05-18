@@ -41,10 +41,13 @@
 #include <core/diagnostics/call_context.h>
 #include <core/mixer/image/image_mixer.h>
 
+#include <condition_variable>
+#include <map>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace caspar { namespace core {
 
@@ -74,6 +77,12 @@ struct video_channel::impl final
     std::map<route_id, std::weak_ptr<core::route>> routes_;
     std::mutex                                     routes_mutex_;
 
+    std::multimap<uint64_t, std::function<void()>> schedule_;
+    std::mutex                                     schedule_mutex_;
+
+    std::mutex              tick_mutex_;
+    std::condition_variable tick_cv_;
+
     std::atomic<bool> abort_request_{false};
     std::thread       thread_;
 
@@ -102,13 +111,14 @@ struct video_channel::impl final
     impl(int                                       index,
          const core::video_format_desc&            format_desc,
          color_space                               default_color_space,
+         bool                                      deterministic,
          std::unique_ptr<image_mixer>              image_mixer,
          std::function<void(core::monitor::state)> tick)
-        : channel_info_(index, image_mixer->depth(), default_color_space)
+        : channel_info_(index, image_mixer->depth(), default_color_space, deterministic)
         , output_(graph_, format_desc, channel_info_)
         , image_mixer_(std::move(image_mixer))
         , mixer_(index, graph_, image_mixer_)
-        , stage_(std::make_shared<core::stage>(index, graph_, format_desc))
+        , stage_(std::make_shared<core::stage>(index, graph_, format_desc, deterministic))
         , tick_(std::move(tick))
     {
         graph_->set_color("produce-time", caspar::diagnostics::color(0.0f, 1.0f, 0.0f));
@@ -121,15 +131,56 @@ struct video_channel::impl final
 
         CASPAR_LOG(info) << print() << " Successfully Initialized.";
 
+        // Wake the channel thread whenever consumers attach or detach, so a deterministic
+        // channel can resume ticking when a consumer is added (or pause when the last one
+        // leaves).
+        output_.set_on_consumers_changed([this] {
+            std::lock_guard<std::mutex> lock(tick_mutex_);
+            tick_cv_.notify_all();
+        });
+
         thread_ = std::thread([this] {
             set_thread_realtime_priority();
             set_thread_name(L"channel-" + std::to_wstring(channel_info_.index));
 
             while (!abort_request_) {
                 try {
+                    // In deterministic mode, only tick while at least one consumer is attached.
+                    // Without a consumer there is no demand for frames, and ticking would
+                    // race past any pending scheduled commands.
+                    if (channel_info_.deterministic) {
+                        std::unique_lock<std::mutex> lock(tick_mutex_);
+                        tick_cv_.wait(lock, [this] {
+                            return abort_request_.load() || output_.consumer_count() > 0;
+                        });
+                        if (abort_request_)
+                            break;
+                    }
+
                     graph_->set_text(print());
 
                     frame_counter_ += 1;
+
+                    // Drain any scheduled actions due at or before this frame so
+                    // they are applied to stage state before we produce frame N.
+                    {
+                        std::vector<std::function<void()>> due;
+                        {
+                            std::lock_guard<std::mutex> lock(schedule_mutex_);
+                            auto                        it = schedule_.begin();
+                            while (it != schedule_.end() && it->first <= frame_counter_) {
+                                due.push_back(std::move(it->second));
+                                it = schedule_.erase(it);
+                            }
+                        }
+                        for (auto& action : due) {
+                            try {
+                                action();
+                            } catch (...) {
+                                CASPAR_LOG_CURRENT_EXCEPTION();
+                            }
+                        }
+                    }
 
                     caspar::timer frame_timer;
 
@@ -199,6 +250,10 @@ struct video_channel::impl final
     {
         CASPAR_LOG(info) << print() << " Uninitializing.";
         abort_request_ = true;
+        {
+            std::lock_guard<std::mutex> lock(tick_mutex_);
+            tick_cv_.notify_all();
+        }
         thread_.join();
     }
 
@@ -229,6 +284,12 @@ struct video_channel::impl final
         return route;
     }
 
+    void schedule_at(uint64_t frame_number, std::function<void()> action)
+    {
+        std::lock_guard<std::mutex> lock(schedule_mutex_);
+        schedule_.emplace(frame_number, std::move(action));
+    }
+
     std::wstring print() const
     {
         return L"video_channel[" + std::to_wstring(channel_info_.index) + L"|" + stage_->video_format_desc().name +
@@ -243,9 +304,10 @@ struct video_channel::impl final
 video_channel::video_channel(int                                       index,
                              const core::video_format_desc&            format_desc,
                              color_space                               default_color_space,
+                             bool                                      deterministic,
                              std::unique_ptr<image_mixer>              image_mixer,
                              std::function<void(core::monitor::state)> tick)
-    : impl_(new impl(index, format_desc, default_color_space, std::move(image_mixer), std::move(tick)))
+    : impl_(new impl(index, format_desc, default_color_space, deterministic, std::move(image_mixer), std::move(tick)))
 {
 }
 video_channel::~video_channel() {}
@@ -261,5 +323,10 @@ channel_info         video_channel::get_consumer_channel_info() const { return i
 core::monitor::state video_channel::state() const { return impl_->state_; }
 
 std::shared_ptr<route> video_channel::route(int index, route_mode mode) { return impl_->route(index, mode); }
+
+void video_channel::schedule_at(uint64_t frame_number, std::function<void()> action)
+{
+    impl_->schedule_at(frame_number, std::move(action));
+}
 
 }} // namespace caspar::core

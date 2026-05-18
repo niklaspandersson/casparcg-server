@@ -24,6 +24,7 @@
 #include "../util/ClientInfo.h"
 #include "amcp_command_repository.h"
 #include "amcp_shared.h"
+#include "virtual_channel_registry.h"
 #include <accelerator/accelerator.h>
 #include <future>
 #include <utility>
@@ -41,6 +42,7 @@ struct amcp_command_static_context
     const spl::shared_ptr<const core::frame_producer_registry> producer_registry;
     const spl::shared_ptr<const core::frame_consumer_registry> consumer_registry;
     const std::shared_ptr<amcp_command_repository>             parser;
+    const std::shared_ptr<virtual_channel_registry>            virtual_channels;
     std::function<void(bool)>                                  shutdown_server_now;
     const std::string                                          proxy_host;
     const std::string                                          proxy_port;
@@ -52,6 +54,7 @@ struct amcp_command_static_context
                                 const spl::shared_ptr<const core::frame_producer_registry>& producer_registry,
                                 const spl::shared_ptr<const core::frame_consumer_registry>& consumer_registry,
                                 std::shared_ptr<amcp_command_repository>                    parser,
+                                std::shared_ptr<virtual_channel_registry>                   virtual_channels,
                                 std::function<void(bool)>                                   shutdown_server_now,
                                 std::string                                                 proxy_host,
                                 std::string                                                 proxy_port,
@@ -62,6 +65,7 @@ struct amcp_command_static_context
         , producer_registry(producer_registry)
         , consumer_registry(consumer_registry)
         , parser(std::move(parser))
+        , virtual_channels(std::move(virtual_channels))
         , shutdown_server_now(std::move(shutdown_server_now))
         , proxy_host(std::move(proxy_host))
         , proxy_port(std::move(proxy_port))

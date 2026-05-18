@@ -419,6 +419,7 @@ struct ffmpeg_consumer : public core::frame_consumer
     std::thread                                                                              frame_thread_;
 
     common::bit_depth depth_;
+    bool              deterministic_ = false;
 
   public:
     ffmpeg_consumer(std::string path, std::string args, bool realtime, common::bit_depth depth)
@@ -462,6 +463,7 @@ struct ffmpeg_consumer : public core::frame_consumer
 
         format_desc_   = format_desc;
         channel_index_ = channel_info.index;
+        deterministic_ = channel_info.deterministic;
 
         graph_->set_text(print());
 
@@ -650,7 +652,11 @@ struct ffmpeg_consumer : public core::frame_consumer
             }
         }
 
-        if (!frame_buffer_.try_push({frame, video_pts, audio_pts})) {
+        if (deterministic_) {
+            // Block until the writer thread accepts the frame. This provides back-pressure
+            // to the channel loop so we never drop frames in deterministic render mode.
+            frame_buffer_.push({frame, video_pts, audio_pts});
+        } else if (!frame_buffer_.try_push({frame, video_pts, audio_pts})) {
             graph_->set_tag(diagnostics::tag_severity::WARNING, "dropped-frame");
         }
 
@@ -667,6 +673,8 @@ struct ffmpeg_consumer : public core::frame_consumer
     std::wstring name() const override { return L"ffmpeg"; }
 
     bool has_synchronization_clock() const override { return false; }
+
+    bool supports_deterministic_sync() const override { return true; }
 
     int index() const override { return 100000 + channel_index_; }
 

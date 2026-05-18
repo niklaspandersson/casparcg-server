@@ -368,6 +368,25 @@ class transition_producer : public frame_producer
     [[nodiscard]] core::monitor::state state() const override { return state_; }
 
     bool is_ready() override { return dst_producer_->is_ready(); }
+
+    bool supports_deterministic_sync() const override
+    {
+        return dst_producer_->supports_deterministic_sync() && src_producer_->supports_deterministic_sync();
+    }
+
+    bool wait_for_frame(const core::video_field field, std::chrono::milliseconds timeout) override
+    {
+        // Both source and destination may be drawn during a transition.
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        if (!src_producer_->wait_for_frame(field, timeout)) {
+            return false;
+        }
+        const auto remaining = deadline - std::chrono::steady_clock::now();
+        if (remaining <= std::chrono::milliseconds::zero()) {
+            return dst_producer_->is_ready();
+        }
+        return dst_producer_->wait_for_frame(field, std::chrono::duration_cast<std::chrono::milliseconds>(remaining));
+    }
 };
 
 spl::shared_ptr<frame_producer> create_transition_producer(const spl::shared_ptr<frame_producer>& destination,

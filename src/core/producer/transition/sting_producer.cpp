@@ -399,6 +399,34 @@ class sting_producer : public frame_producer
     monitor::state state() const override { return state_; }
 
     bool is_ready() override { return dst_producer_->is_ready(); }
+
+    bool supports_deterministic_sync() const override
+    {
+        return dst_producer_->supports_deterministic_sync() && src_producer_->supports_deterministic_sync() &&
+               mask_producer_->supports_deterministic_sync() && overlay_producer_->supports_deterministic_sync();
+    }
+
+    bool wait_for_frame(const core::video_field field, std::chrono::milliseconds timeout) override
+    {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        auto       wait_one = [&](const spl::shared_ptr<frame_producer>& p) {
+            const auto remaining = deadline - std::chrono::steady_clock::now();
+            if (remaining <= std::chrono::milliseconds::zero()) {
+                return p->is_ready();
+            }
+            return p->wait_for_frame(field,
+                                     std::chrono::duration_cast<std::chrono::milliseconds>(remaining));
+        };
+        if (!wait_one(src_producer_))
+            return false;
+        if (!wait_one(dst_producer_))
+            return false;
+        if (!wait_one(mask_producer_))
+            return false;
+        if (!wait_one(overlay_producer_))
+            return false;
+        return true;
+    }
 };
 
 spl::shared_ptr<frame_producer> create_sting_producer(const frame_producer_dependencies&     dependencies,
