@@ -92,11 +92,20 @@ class video_channel final
 
     int index() const;
 
+    // Number of frames produced so far (deterministic renders use this as the render progress).
+    uint64_t frame_number() const;
+
     [[nodiscard]] channel_info get_consumer_channel_info() const;
 
     std::shared_ptr<core::route> route(int index = -1, route_mode mode = route_mode::foreground);
 
     void schedule_at(uint64_t frame_number, std::function<void()> action);
+
+    // Deterministic mode only: invoked from the channel thread when the render has stalled
+    // (a sync producer failed to deliver) for too many consecutive frames, signalling that the
+    // owner should tear the channel down. Must destroy the channel off-thread (never from the
+    // callback itself) to avoid self-joining the channel thread.
+    void set_on_deterministic_stall(std::function<void()> callback);
 
   private:
     struct impl;

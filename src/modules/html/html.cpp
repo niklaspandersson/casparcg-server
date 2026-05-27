@@ -105,11 +105,13 @@ class renderer_application
     std::vector<CefRefPtr<CefV8Context>> contexts_;
     const bool                           enable_gpu_;
     const bool                           shared_texture_;
+    const bool                           virtual_time_;
 
   public:
-    explicit renderer_application(const bool enable_gpu, const bool shared_texture)
+    explicit renderer_application(const bool enable_gpu, const bool shared_texture, const bool virtual_time)
         : enable_gpu_(enable_gpu)
         , shared_texture_(shared_texture)
+        , virtual_time_(virtual_time)
     {
     }
 
@@ -132,13 +134,17 @@ class renderer_application
 
         CefRefPtr<CefV8Value>     ret;
         CefRefPtr<CefV8Exception> exception;
-        bool                      injected = context->Eval(R"(
-            window.caspar = window.casparcg = {};
-		)",
-                                      CefString(),
-                                      1,
-                                      ret,
-                                      exception);
+        const std::string         s = R"JS(window.caspar = window.casparcg = {};(function(){
+if(window.__casparNoVideo)return;window.__casparNoVideo=1;
+var kill=function(v){try{ console.log('found video element');v.removeAttribute('src'); v.removeAttribute('autoplay'); v.removeAttribute('paused'); v.removeAttribute('preload'); }catch(e){}try{v.muted=true;}catch(e){}try{v.style.display='none';}catch(e){}};
+var mock=function(){return Promise.resolve();};
+try{var P=HTMLMediaElement.prototype;if(!P.__casparPatched){P.__casparPatched=1;P.play=mock;P.load=mock;}}catch(e){}
+var scan=function(){try{var vs=document.querySelectorAll('video');for(var i=0;i<vs.length;i++)kill(vs[i]);}catch(e){}};
+var start=function(){scan();try{window.__casparVideoGuard=new MutationObserver(function(m){for(var i=0;i<m.length;i++){var a=m[i].addedNodes;for(var j=0;j<a.length;j++){var n=a[j];if(n&&n.nodeType===1){if(n.tagName==='VIDEO'){kill(n); console.log('killing from mutationobserver');}else if(n.querySelectorAll){var q=n.querySelectorAll('video');for(var k=0;k<q.length;k++)kill(q[k]);}}}}}).observe(document.documentElement,{childList:true,subtree:true});}catch(e){}};
+if(document?.documentElement) {start();console.log('starting directly');}else window.addEventListener('pageshow',function() {start(); console.log('starting after pageshow');});
+})();)JS";
+
+        bool injected = context->Eval(s, CefString(), 1, ret, exception);
 
         if (!injected) {
             caspar_log(browser, boost::log::trivial::error, "Could not inject javascript animation code.");
@@ -190,6 +196,8 @@ class renderer_application
 #if __unix__
         if (getenv("DISPLAY") == nullptr) {
             command_line->AppendSwitchWithValue("ozone-platform", "headless");
+        } else {
+            command_line->AppendSwitchWithValue("ozone-platform", "x11");
         }
 #endif
 
@@ -199,6 +207,15 @@ class renderer_application
         command_line->AppendSwitch("use-fake-ui-for-media-stream");
         command_line->AppendSwitchWithValue("autoplay-policy", "no-user-gesture-required");
         command_line->AppendSwitchWithValue("remote-allow-origins", "*");
+
+        if (virtual_time_) {
+            // HeadlessExperimental.beginFrame needs the compositor to run all stages
+            // synchronously per BeginFrame, otherwise paints can lag behind the tick we
+            // explicitly requested (defeating deterministic rendering).
+            command_line->AppendSwitch("run-all-compositor-stages-before-draw");
+            // We drive frame production from the host; the renderer must not throttle.
+            command_line->AppendSwitch("disable-frame-rate-limit");
+        }
 
         if (process_type.empty() && !enable_gpu_) {
             // This gives more performance, but disabled gpu effects. Without it a single 1080p producer cannot be run
@@ -221,7 +238,7 @@ bool intercept_command_line(int argc, char** argv)
     CefMainArgs main_args(argc, argv);
 #endif
 
-    return CefExecuteProcess(main_args, CefRefPtr<CefApp>(new renderer_application(false, false)), nullptr) >= 0;
+    return CefExecuteProcess(main_args, CefRefPtr<CefApp>(new renderer_application(false, false, false)), nullptr) >= 0;
 }
 
 void init(const core::module_dependencies& dependencies)
@@ -251,8 +268,12 @@ void init(const core::module_dependencies& dependencies)
             CefString(&settings.cache_path).FromWString(cache_path);
         }
 
-        return CefInitialize(
-            main_args, settings, CefRefPtr<CefApp>(new renderer_application(gpu.first, gpu.second)), nullptr);
+        const bool virtual_time = env::properties().get(L"configuration.html.enable-virtual-time", false);
+
+        return CefInitialize(main_args,
+                             settings,
+                             CefRefPtr<CefApp>(new renderer_application(gpu.first, gpu.second, virtual_time)),
+                             nullptr);
     });
 
     if (!result) {

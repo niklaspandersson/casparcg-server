@@ -468,6 +468,16 @@ struct server::impl
                     }).detach();
                 });
 
+                // If a deterministic render hangs (a producer never delivers), the channel's
+                // watchdog fires this. Destroy the orphaned channel from a detached thread so
+                // ~video_channel does not self-join the channel's own tick thread.
+                channel->set_on_deterministic_stall([virtual_id, registry_weak]() {
+                    std::thread([virtual_id, registry_weak]() {
+                        if (auto r = registry_weak.lock())
+                            r->destroy(virtual_id);
+                    }).detach();
+                });
+
                 const std::wstring lifecycle_key = L"lock-virtual-" + std::to_wstring(virtual_id);
                 return amcp::channel_context(channel, channel->stage(), lifecycle_key);
             });

@@ -59,8 +59,13 @@
 
 #include <include/cef_app.h>
 #include <include/cef_client.h>
+#include <include/cef_devtools_message_observer.h>
+#include <include/cef_registration.h>
 #include <include/cef_render_handler.h>
+#include <include/cef_values.h>
 
+#include <chrono>
+#include <condition_variable>
 #include <optional>
 #include <queue>
 #include <utility>
@@ -122,6 +127,7 @@ class html_client
     , public CefLifeSpanHandler
     , public CefLoadHandler
     , public CefDisplayHandler
+    , public CefDevToolsMessageObserver
 {
     std::wstring                        url_;
     spl::shared_ptr<diagnostics::graph> graph_;
@@ -136,6 +142,8 @@ class html_client
     core::video_format_desc              format_desc_;
     bool                                 gpu_enabled_;
     bool                                 shared_texture_enable_;
+    bool                                 vtc_enabled_;
+    bool                                 wait_for_fp_;
     tbb::concurrent_queue<std::wstring>  javascript_before_load_;
     std::atomic<bool>                    loaded_;
     std::atomic<bool>                    not_found_;
@@ -152,7 +160,47 @@ class html_client
     core::draw_frame   last_frame_;
     std::int_least64_t last_frame_time_;
 
-    CefRefPtr<CefBrowser> browser_;
+    CefRefPtr<CefBrowser>      browser_;
+    CefRefPtr<CefRegistration> cdp_registration_; // keeps DevTools observer alive
+
+    // ── Virtual time / external BeginFrame state ────────────────────────────
+    // Active when vtc_enabled_ is true. Drives one tick per channel pull:
+    // each wait_for_frame() advances virtual time by one frame duration and
+    // issues one HeadlessExperimental.beginFrame, then blocks until both the
+    // virtualTimeBudgetExpired event and OnPaint have been observed for that
+    // tick.
+    // ready_to_render_ flips once the page is ready for pulled ticks. In vtc mode that
+    // means both load and firstPaint have been observed (in either order) and virtual
+    // time has been paused. In non-vtc mode it's just OnLoadEnd.
+    std::atomic<bool>       first_paint_seen_{false};
+    std::atomic<bool>       ready_to_render_{false};
+    mutable std::mutex      ready_mutex_;
+    std::condition_variable ready_cv_;
+
+    std::mutex              tick_mutex_;
+    std::condition_variable tick_cv_;
+    bool                    tick_budget_expired_ = false;
+    bool                    tick_paint_received_ = false;
+
+    uint64_t frame_count_ = 0; // number of vtc ticks issued
+
+    // ── Marker-sync (TID_UI only) ───────────────────────────────────────────
+    // A unique per-tick color marker is stamped into the page's top-left corner
+    // (window.__casparMark) so OnPaint can correlate a paint buffer to the
+    // committed frame and discard stale / partially-composited paints (CEF
+    // issue #4166). These are only touched on the CEF UI thread — tick()'s
+    // dispatched lambda, the virtualTimeBudgetExpired handler and OnPaint all run
+    // there — so they need no extra locking. The marker is overwritten before the
+    // frame is queued so it never reaches the output.
+    static constexpr int MARK_W              = 6; // marker block size (device px)
+    static constexpr int MARK_H              = 6;
+    static constexpr int MARKER_TOL          = 24;        // per-channel match tolerance
+    static constexpr int SYNC_PUMP_MS        = 4;         // pacing between begin-frames (renderer breathing room)
+    static constexpr int SYNC_TIMEOUT_MS     = 250;       // wall-clock budget to get the marker-matching paint
+    uint8_t              expected_marker_[3] = {0, 0, 0}; // r,g,b expected this tick (TID_UI)
+    std::atomic<int>     sync_retries_       = 0;         // begin-frames pumped this tick (diagnostics)
+    std::atomic<int>     paints_this_tick_   = 0;         // OnPaint calls observed this tick (diagnostics)
+    bool                 force_accept_       = false;     // give-up: accept next paint regardless of marker
 
 #ifdef WIN32
     std::shared_ptr<accelerator::d3d::d3d_device> const d3d_device_;
@@ -165,6 +213,8 @@ class html_client
                 core::video_format_desc                    format_desc,
                 bool                                       gpu_enabled,
                 bool                                       shared_texture_enable,
+                bool                                       vtc_enabled,
+                bool                                       wait_for_fp,
                 std::wstring                               url)
         : url_(std::move(url))
         , graph_(graph)
@@ -172,6 +222,8 @@ class html_client
         , format_desc_(std::move(format_desc))
         , gpu_enabled_(gpu_enabled)
         , shared_texture_enable_(shared_texture_enable)
+        , vtc_enabled_(vtc_enabled)
+        , wait_for_fp_(wait_for_fp)
 #ifdef WIN32
         , d3d_device_(accelerator::d3d::d3d_device::get_device())
 #endif
@@ -207,11 +259,54 @@ class html_client
     {
         closing_ = true;
 
+        // Wake anything blocked in wait_for_frame / tick so it can observe closing_.
+        ready_cv_.notify_all();
+        tick_cv_.notify_all();
+
         html::invoke([this] {
+            cdp_registration_ = nullptr; // unregister DevTools observer
             if (browser_ != nullptr) {
                 browser_->GetHost()->CloseBrowser(true);
             }
         });
+    }
+
+    bool supports_deterministic_sync() const { return vtc_enabled_; }
+
+    // Pull-based tick driver used by the deterministic channel.
+    // Returns true once a frame is queued and ready for receive(). Each
+    // successful call advances virtual time by one frame duration and issues
+    // exactly one BeginFrame, so the channel and the page tick in lockstep.
+    bool wait_for_frame(std::chrono::milliseconds timeout)
+    {
+        if (!vtc_enabled_) {
+            return is_ready();
+        }
+
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+
+        // Wait for first paint (which we treat as "page has produced at least
+        // one frame and is ready for ticked rendering").
+        {
+            std::unique_lock<std::mutex> lock(ready_mutex_);
+            if (!ready_cv_.wait_until(
+                    lock, deadline, [&] { return ready_to_render_.load() || closing_ || not_found_; }))
+                return false;
+            if (closing_ || not_found_)
+                return false;
+        }
+
+        // If this tick's frame is already queued (not yet popped), nothing to do.
+        // Note: we must check the queue, not is_ready() — is_ready() also reports
+        // true once last_frame_ is set, which persists after the first pop and would
+        // suppress every subsequent tick, freezing the render on frame 1.
+        {
+            std::lock_guard<std::mutex> lock(frames_mutex_);
+            if (!frames_.empty())
+                return true;
+        }
+
+        return tick(deadline);
     }
 
     bool try_pop(const core::video_field field)
@@ -242,7 +337,7 @@ class html_client
              * The hazard here is that sometimes animations will
              * start a field later than intended.
              */
-            if (field == core::video_field::a && frames_.size() == 1) {
+            if (!vtc_enabled_ && field == core::video_field::a && frames_.size() == 1) {
                 auto now_time = now();
 
                 // Make sure there has been a gap before this pop, of at least a couple of frames
@@ -354,12 +449,54 @@ class html_client
         if (shared_texture_enable_ || closing_ || not_found_)
             return;
 
+        // Drop paints arriving before the page is ready (only when vtc or wait-for-fp
+        // is enabled). Avoids the empty initial frame being captured as the first frame.
+        if ((vtc_enabled_ || wait_for_fp_) && !ready_to_render_.load())
+            return;
+
         graph_->set_value("browser-tick-time", paint_timer_.elapsed() * format_desc_.fps * 0.5);
         paint_timer_.restart();
         CASPAR_ASSERT(CefCurrentlyOn(TID_UI));
 
         if (type != PET_VIEW)
             return;
+
+        // Marker-sync: in deterministic mode, accept a paint only if it carries THIS tick's
+        // marker (CEF #4166 — stale/partial paints show an earlier marker). Crucially this
+        // rejects leftover paints from previous ticks, so a tick can never be satisfied by an
+        // old frame (which dropped/duplicated frames and made playback choppy). tick() drives
+        // the begin-frame pumping; here we only judge and, on a match, queue the frame.
+        if (vtc_enabled_) {
+            ++paints_this_tick_;
+            const auto* buf = static_cast<const unsigned char*>(buffer);
+            int         rr = 0, gg = 0, bb = 0;
+            bool        matched = false;
+            const int   cx      = MARK_W / 2;
+            const int   cy      = MARK_H / 2;
+            if (buf != nullptr && cx < width && cy < height) {
+                const size_t o = (static_cast<size_t>(cy) * width + cx) * 4;
+                rr             = buf[o + 2];
+                gg             = buf[o + 1];
+                bb             = buf[o + 0];
+                const int dr   = rr - expected_marker_[0];
+                const int dg   = gg - expected_marker_[1];
+                const int db   = bb - expected_marker_[2];
+                matched        = dr <= MARKER_TOL && dr >= -MARKER_TOL && dg <= MARKER_TOL && dg >= -MARKER_TOL &&
+                          db <= MARKER_TOL && db >= -MARKER_TOL;
+            }
+
+            bool accept;
+            {
+                std::lock_guard<std::mutex> lock(tick_mutex_);
+                // Only once per tick, only after this tick's budget expired, only on a marker
+                // match (or a forced give-up). OnPaint is serialized on TID_UI, so the next
+                // paint sees tick_paint_received_ already set and is discarded.
+                accept = tick_budget_expired_ && !tick_paint_received_ && (matched || force_accept_);
+            }
+
+            if (!accept)
+                return; // discard stale / pre-budget / duplicate paint; tick() pumps the next
+        }
 
         core::pixel_format_desc pixel_desc(core::pixel_format::bgra);
         pixel_desc.planes.emplace_back(width, height, 4);
@@ -384,6 +521,17 @@ class html_client
 
         graph_->set_value("memcpy", test_timer_.elapsed() * format_desc_.fps * 0.5 * 5);
 
+        // Hide the corner marker: overwrite the marker block with the pixel just to its
+        // right so it never reaches the output (a few-pixel corner smear at worst).
+        if (vtc_enabled_ && width > MARK_W) {
+            for (int y = 0; y < MARK_H && y < height; ++y) {
+                char*       row = dst + static_cast<size_t>(y) * width * 4;
+                const char* nbr = row + static_cast<size_t>(MARK_W) * 4;
+                for (int x = 0; x < MARK_W; ++x)
+                    std::memcpy(row + static_cast<size_t>(x) * 4, nbr, 4);
+            }
+        }
+
         {
             std::lock_guard<std::mutex> lock(frames_mutex_);
 
@@ -396,6 +544,8 @@ class html_client
             }
             graph_->set_value("buffered-frames", (double)frames_.size() / frames_max_size_);
         }
+
+        notify_tick_paint();
     }
 
 #ifdef WIN32
@@ -406,6 +556,9 @@ class html_client
     {
         try {
             if (!shared_texture_enable_ || closing_ || not_found_)
+                return;
+
+            if ((vtc_enabled_ || wait_for_fp_) && !ready_to_render_.load())
                 return;
 
             graph_->set_value("browser-tick-time", paint_timer_.elapsed() * format_desc_.fps * 0.5);
@@ -451,6 +604,8 @@ class html_client
                     }
                 }
             }
+
+            notify_tick_paint();
         } catch (...) {
             CASPAR_LOG_CURRENT_EXCEPTION();
         }
@@ -462,6 +617,26 @@ class html_client
         CASPAR_ASSERT(CefCurrentlyOn(TID_UI));
 
         browser_ = std::move(browser);
+
+        if (vtc_enabled_ || wait_for_fp_) {
+            cdp_registration_ = browser_->GetHost()->AddDevToolsMessageObserver(this);
+
+            // Page.enable + lifecycle events: needed for firstPaint detection.
+            browser_->GetHost()->ExecuteDevToolsMethod(0, "Page.enable", nullptr);
+
+            auto lc = CefDictionaryValue::Create();
+            lc->SetBool("enabled", true);
+            browser_->GetHost()->ExecuteDevToolsMethod(0, "Page.setLifecycleEventsEnabled", lc);
+
+            // if (vtc_enabled_) {
+            //     // Run the video-neutralizer at document-start on every document (before any page
+            //     // script), so a <video> never enters the not-ready/playing state that stalls
+            //     // compositing. See video_neutralizer_script().
+            //     auto add = CefDictionaryValue::Create();
+            //     add->SetString("source", video_neutralizer_script());
+            //     browser_->GetHost()->ExecuteDevToolsMethod(0, "Page.addScriptToEvaluateOnNewDocument", add);
+            // }
+        }
     }
 
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override
@@ -528,6 +703,13 @@ class html_client
             std::lock_guard<std::mutex> lock(state_mutex_);
             state_ = {};
         }
+
+        // Wake anything blocked in wait_for_frame so it can observe not_found_ and bail out.
+        ready_cv_.notify_all();
+        {
+            std::lock_guard<std::mutex> lock(tick_mutex_);
+        }
+        tick_cv_.notify_all();
     }
 
     void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override
@@ -537,6 +719,44 @@ class html_client
 
         loaded_ = true;
         execute_queued_javascript();
+
+        maybe_arm_ready();
+    }
+
+    // Called when either firstPaint or load has fired. Flips ready_to_render_ once
+    // the page is in a state suitable for the channel to start pulling frames. In
+    // vtc mode this also pauses the page's virtual clock so subsequent ticks own
+    // the timeline.
+    void maybe_arm_ready()
+    {
+        if (!loaded_.load())
+            return;
+        // In vtc mode the compositor only paints in response to a BeginFrame we
+        // issue from tick(), and we don't tick until ready_to_render_ is set — so
+        // gating readiness on firstPaint here would deadlock (firstPaint needs a
+        // paint needs a BeginFrame needs ready). Arm on load alone; the first
+        // tick's BeginFrame produces the first painted frame. The firstPaint gate
+        // still applies in the non-vtc wait-for-fp case, where CEF paints on its
+        // own and we only want to start once real content has been rendered.
+        if (wait_for_fp_ && !vtc_enabled_ && !first_paint_seen_.load())
+            return;
+        if (ready_to_render_.load())
+            return;
+
+        if (vtc_enabled_) {
+            CASPAR_ASSERT(CefCurrentlyOn(TID_UI));
+            // Freeze the page's virtual clock. From here, every tick() advances time by
+            // exactly one frame duration via a budgeted setVirtualTimePolicy + beginFrame.
+            auto p = CefDictionaryValue::Create();
+            p->SetString("policy", "pause");
+            browser_->GetHost()->ExecuteDevToolsMethod(0, "Emulation.setVirtualTimePolicy", p);
+        }
+
+        ready_to_render_ = true;
+        {
+            std::lock_guard<std::mutex> lock(ready_mutex_);
+        }
+        ready_cv_.notify_all();
     }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser>        browser,
@@ -631,6 +851,201 @@ class html_client
                std::to_wstring(format_desc_.square_height) + L" " + std::to_wstring(format_desc_.fps);
     }
 
+    // ── Virtual time / BeginFrame helpers ──────────────────────────────────
+
+    // Cumulative virtual time (µs) at the end of frame N. Computed from the
+    // rational frame duration (`duration / time_scale`) rather than a per-frame
+    // float increment so non-integer rates (NTSC) don't drift.
+    uint64_t virtual_time_us_at(uint64_t frame_n) const
+    {
+        const uint64_t num = static_cast<uint64_t>(format_desc_.duration) * 1'000'000ULL;
+        const uint64_t den = static_cast<uint64_t>(format_desc_.time_scale);
+        return den > 0 ? (frame_n * num) / den : 0;
+    }
+
+    // Advance virtual time by one frame budget; the compositing BeginFrame is
+    // issued from OnDevToolsEvent when virtualTimeBudgetExpired fires (so the clock
+    // has reached and paused at this frame's timestamp before we paint). Blocks
+    // until both that event and the resulting OnPaint are observed.
+    // Runs on the channel thread; CEF calls are dispatched to TID_UI.
+    bool tick(std::chrono::steady_clock::time_point deadline)
+    {
+        const uint64_t prev_us   = virtual_time_us_at(frame_count_);
+        const uint64_t next_us   = virtual_time_us_at(frame_count_ + 1);
+        const uint64_t budget_us = next_us - prev_us;
+
+        const double budget_ms = static_cast<double>(budget_us) / 1000.0;
+
+        ++frame_count_;
+
+        {
+            std::lock_guard<std::mutex> lock(tick_mutex_);
+            tick_budget_expired_ = false;
+            tick_paint_received_ = false;
+            force_accept_        = false;
+        }
+
+        // Per-tick marker color, well-spread so consecutive ticks differ greatly in
+        // every channel (a stale previous-tick marker can never fall inside tolerance).
+        const uint8_t mr = static_cast<uint8_t>((frame_count_ * 97 + 13) & 0xFF);
+        const uint8_t mg = static_cast<uint8_t>((frame_count_ * 149 + 71) & 0xFF);
+        const uint8_t mb = static_cast<uint8_t>((frame_count_ * 211 + 167) & 0xFF);
+
+        html::begin_invoke([this, budget_ms, mr, mg, mb] {
+            if (closing_ || browser_ == nullptr)
+                return;
+
+            // Stamp this tick's corner marker and reset the per-tick retry count.
+            // OnPaint reads the marker back to confirm the frame is the committed,
+            // fully-composited one before accepting it (CEF #4166). The marker change
+            // and this frame's animation work composite together on the BeginFrame
+            // issued after virtualTimeBudgetExpired.
+            expected_marker_[0] = mr;
+            expected_marker_[1] = mg;
+            expected_marker_[2] = mb;
+            sync_retries_       = 0;
+            paints_this_tick_   = 0;
+            {
+                // Set the marker via Runtime.evaluate on the SAME DevTools pipe as the
+                // virtual-time advance below, so it is processed first and its DOM
+                // mutation is committed by the budget's BeginMainFrame together with this
+                // frame's content. (CefFrame::ExecuteJavaScript uses a separate IPC path
+                // that races virtual time and lands the marker a frame or two late — which
+                // made every tick read a stale marker.) The expression is self-contained,
+                // so it also (re)creates the marker element if a template wiped the DOM.
+                const std::string rgb =
+                    "rgb(" + std::to_string(mr) + "," + std::to_string(mg) + "," + std::to_string(mb) + ")";
+                const std::string expr = "(function(c){var m=document.getElementById('__caspar_mark');"
+                                         "if(!m){m=document.createElement('div');m.id='__caspar_mark';"
+                                         "m.style.cssText='position:fixed;left:0;top:0;width:6px;height:6px;"
+                                         "margin:0;padding:0;border:0;z-index:2147483647;pointer-events:none';"
+                                         "document.documentElement.appendChild(m);}m.style.background=c;})('" +
+                                         rgb + "')";
+                auto ev = CefDictionaryValue::Create();
+                ev->SetString("expression", expr);
+                browser_->GetHost()->ExecuteDevToolsMethod(0, "Runtime.evaluate", ev);
+            }
+
+            // Advance the page's virtual clock by exactly one frame duration.
+            // Use pauseIfNetworkFetchesPending so an in-flight fetch defers the
+            // tick rather than letting JS observe an inconsistent clock jump.
+            // When the budget is consumed, Emulation.virtualTimeBudgetExpired fires
+            // (handled in OnDevToolsEvent) and we composite the frame from there.
+            auto vt = CefDictionaryValue::Create();
+            vt->SetString("policy", "pauseIfNetworkFetchesPending");
+            vt->SetDouble("budget", budget_ms);
+            browser_->GetHost()->ExecuteDevToolsMethod(0, "Emulation.setVirtualTimePolicy", vt);
+        });
+
+        // Wait for the budget to expire: virtual time has advanced one frame and paused,
+        // with this tick's content + marker committed.
+        {
+            std::unique_lock<std::mutex> lock(tick_mutex_);
+            if (!tick_cv_.wait_until(lock, deadline, [&] { return tick_budget_expired_ || closing_ || not_found_; }))
+                return false;
+            if (closing_ || not_found_)
+                return false;
+        }
+
+        // Pump begin-frames, paced with breathing room, until OnPaint delivers a frame
+        // carrying this tick's marker. Back-to-back begin-frames just re-deliver the same
+        // stale buffer; the renderer needs a few ms to composite the freshly-committed frame
+        // (CEF #4166 — the matching paint arrived ~6ms after the budget). Pacing is wall-clock
+        // only — virtual time stays paused — so the captured frame is deterministic; only the
+        // number of discarded paints varies run to run.
+        auto sync_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(SYNC_TIMEOUT_MS);
+        if (sync_deadline > deadline)
+            sync_deadline = deadline;
+
+        while (std::chrono::steady_clock::now() < deadline) {
+            {
+                std::unique_lock<std::mutex> lock(tick_mutex_);
+                if (tick_paint_received_)
+                    return !closing_ && !not_found_;
+                if (closing_ || not_found_)
+                    return false;
+            }
+
+            if (std::chrono::steady_clock::now() >= sync_deadline && !force_accept_) {
+                std::lock_guard<std::mutex> lock(tick_mutex_);
+                force_accept_ = true;
+            }
+
+            html::begin_invoke([this] {
+                if (closing_ || browser_ == nullptr)
+                    return;
+                ++sync_retries_;
+                browser_->GetHost()->Invalidate(PET_VIEW);
+                browser_->GetHost()->SendExternalBeginFrame();
+            });
+
+            std::unique_lock<std::mutex> lock(tick_mutex_);
+            tick_cv_.wait_for(lock, std::chrono::milliseconds(SYNC_PUMP_MS), [&] {
+                return tick_paint_received_ || closing_ || not_found_;
+            });
+        }
+
+        CASPAR_LOG(warning) << print() << L" [vtc] tick " << frame_count_ << L" gave up at deadline (begin-frames="
+                            << sync_retries_.load() << L", paints=" << paints_this_tick_.load() << L")";
+        return false;
+    }
+
+    void notify_tick_paint()
+    {
+        if (!vtc_enabled_)
+            return;
+
+        {
+            std::lock_guard<std::mutex> lock(tick_mutex_);
+            tick_paint_received_ = true;
+        }
+        tick_cv_.notify_all();
+    }
+
+    // ── CefDevToolsMessageObserver ─────────────────────────────────────────
+
+    void OnDevToolsEvent(CefRefPtr<CefBrowser> browser,
+                         const CefString&      method,
+                         const void*           message,
+                         size_t                message_size) override
+    {
+        CASPAR_ASSERT(CefCurrentlyOn(TID_UI));
+
+        if (method == "Page.lifecycleEvent") {
+            // Payload: {"frameId":"...","loaderId":"...","name":"firstPaint","timestamp":...}
+            const std::string payload(static_cast<const char*>(message), message_size);
+            if (payload.find("\"firstPaint\"") != std::string::npos) {
+                CASPAR_LOG(info) << print() << L" CDP: firstPaint";
+                first_paint_seen_ = true;
+                maybe_arm_ready();
+            }
+        } else if (method == "Emulation.virtualTimeBudgetExpired") {
+            // Virtual time reached this frame's timestamp and is paused; this tick's content
+            // and marker are committed. tick() now pumps begin-frames (paced) until the
+            // marker-matching paint arrives. We deliberately do NOT composite from here: a
+            // begin-frame issued here could outlive the tick and satisfy the *next* tick with
+            // a stale frame, which dropped/duplicated frames and made playback choppy.
+            {
+                std::lock_guard<std::mutex> lock(tick_mutex_);
+                tick_budget_expired_ = true;
+            }
+
+            tick_cv_.notify_all();
+        }
+    }
+
+    void OnDevToolsMethodResult(CefRefPtr<CefBrowser> browser,
+                                int                   message_id,
+                                bool                  success,
+                                const void*           message,
+                                size_t                message_size) override
+    {
+        if (!success) {
+            const std::string payload(static_cast<const char*>(message), message_size);
+            CASPAR_LOG(warning) << print() << L" CDP method failed: " << payload;
+        }
+    }
+
     IMPLEMENT_REFCOUNTING(html_client);
 };
 
@@ -639,6 +1054,7 @@ class html_producer : public core::frame_producer
     core::video_format_desc             format_desc_;
     const std::wstring                  url_;
     spl::shared_ptr<diagnostics::graph> graph_;
+    bool                                vtc_enabled_ = false;
 
     CefRefPtr<html_client> client_;
 
@@ -650,15 +1066,21 @@ class html_producer : public core::frame_producer
         , url_(url)
     {
         html::invoke([&] {
-            auto gpu = is_gpu_shared_texture_enabled();
+            auto       gpu         = is_gpu_shared_texture_enabled();
+            const bool vtc         = env::properties().get(L"configuration.html.enable-virtual-time", false);
+            const bool wait_for_fp = env::properties().get(L"configuration.html.wait-for-fp", false) || vtc;
 
-            client_ = new html_client(frame_factory, graph_, format_desc, gpu.first, gpu.second, url_);
+            vtc_enabled_ = vtc;
+
+            client_ =
+                new html_client(frame_factory, graph_, format_desc, gpu.first, gpu.second, vtc, wait_for_fp, url_);
 
             CefWindowInfo window_info;
             window_info.bounds.width                 = format_desc.square_width;
             window_info.bounds.height                = format_desc.square_height;
             window_info.windowless_rendering_enabled = true;
             window_info.shared_texture_enabled       = gpu.second;
+            window_info.external_begin_frame_enabled = vtc;
 
             CefBrowserSettings browser_settings;
             browser_settings.webgl = gpu.first ? cef_state_t::STATE_ENABLED : cef_state_t::STATE_DISABLED;
@@ -693,6 +1115,16 @@ class html_producer : public core::frame_producer
     {
         if (client_ != nullptr) {
             return client_->is_ready();
+        }
+        return false;
+    }
+
+    bool supports_deterministic_sync() const override { return vtc_enabled_; }
+
+    bool wait_for_frame(const core::video_field field, std::chrono::milliseconds timeout) override
+    {
+        if (client_ != nullptr) {
+            return client_->wait_for_frame(timeout);
         }
         return false;
     }

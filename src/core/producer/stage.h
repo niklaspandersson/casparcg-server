@@ -60,6 +60,10 @@ struct stage_frames
     int                     nb_samples;
     std::vector<draw_frame> frames;
     std::vector<draw_frame> frames2;
+    // Deterministic mode only: true if a sync-capable foreground producer failed to deliver a
+    // frame within the stall timeout this tick (the layer fell back to a still frame). The
+    // channel uses this to detect a hung render and abort it.
+    bool stalled = false;
 };
 
 /**

@@ -210,6 +210,7 @@ struct stage::impl : public std::enable_shared_from_this<impl>
                     if (stalled) {
                         graph_->set_tag(diagnostics::tag_severity::WARNING, "deterministic-stall");
                     }
+                    result.stalled = stalled;
                 }
 
                 for (auto& l : layerVec) {

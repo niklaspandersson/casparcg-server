@@ -25,6 +25,8 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <utility>
+#include <vector>
 
 namespace caspar { namespace protocol { namespace amcp {
 
@@ -44,6 +46,10 @@ class virtual_channel_registry
 
     // Returns the channel_context for `id`, or an empty channel_context if not found.
     channel_context try_get(int id) const;
+
+    // Snapshot of the live virtual channels (id + channel), ascending by id. Holds a strong
+    // reference to each channel so callers can inspect it without it being torn down underneath.
+    std::vector<std::pair<int, std::shared_ptr<core::video_channel>>> list() const;
 
   private:
     mutable std::mutex                 mutex_;

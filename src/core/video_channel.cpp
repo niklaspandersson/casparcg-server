@@ -70,7 +70,7 @@ struct video_channel::impl final
     caspar::core::mixer          mixer_;
     std::shared_ptr<core::stage> stage_;
 
-    uint64_t frame_counter_ = 0;
+    std::atomic<uint64_t> frame_counter_{0}; // atomic: read cross-thread by frame_number()
 
     std::function<void(core::monitor::state)> tick_;
 
@@ -85,6 +85,15 @@ struct video_channel::impl final
 
     std::atomic<bool> abort_request_{false};
     std::thread       thread_;
+
+    // Deterministic hung-render watchdog. If the stage reports a stall (a sync producer failed
+    // to deliver within the stall timeout) for this many consecutive frames, the render is
+    // considered hung: we invoke on_stalled_ (which tears the channel down off-thread) and exit
+    // the tick loop. Each stalled frame already costs the stage's wait timeout, so this is a
+    // backstop — SCHEDULE CANCEL is the immediate path.
+    static constexpr int                  deterministic_stall_abort_frames_ = 3;
+    int                                   consecutive_stalls_               = 0;
+    std::function<void()>                 on_stalled_;
 
     std::function<void(int, const layer_frame&)> routesCb = [&](int layer, const layer_frame& layer_frame) {
         std::lock_guard<std::mutex> lock(routes_mutex_);
@@ -205,6 +214,23 @@ struct video_channel::impl final
                     auto          stage_frames = (*stage_)(frame_counter_, background_routes, routesCb);
                     graph_->set_value("produce-time", produce_timer.elapsed() * stage_frames.format_desc.hz * 0.5);
 
+                    // Hung-render watchdog (deterministic only). A stall means a sync producer
+                    // could not deliver and the frame fell back to a still — the render is no
+                    // longer deterministic. After enough consecutive stalls, abort: hand off
+                    // teardown to the owner (off-thread, so ~video_channel does not self-join
+                    // this thread) and stop ticking.
+                    if (channel_info_.deterministic && stage_frames.stalled) {
+                        if (++consecutive_stalls_ >= deterministic_stall_abort_frames_ && on_stalled_) {
+                            CASPAR_LOG(error)
+                                << print() << L" deterministic render stalled for " << consecutive_stalls_
+                                << L" consecutive frames; aborting render.";
+                            on_stalled_();
+                            break;
+                        }
+                    } else {
+                        consecutive_stalls_ = 0;
+                    }
+
                     // This is a little race prone, but at worst a new consumer will start with a frame of black
                     bool has_consumers = output_.consumer_count() > 0;
 
@@ -290,6 +316,8 @@ struct video_channel::impl final
         schedule_.emplace(frame_number, std::move(action));
     }
 
+    void set_on_deterministic_stall(std::function<void()> callback) { on_stalled_ = std::move(callback); }
+
     std::wstring print() const
     {
         return L"video_channel[" + std::to_wstring(channel_info_.index) + L"|" + stage_->video_format_desc().name +
@@ -297,6 +325,8 @@ struct video_channel::impl final
     }
 
     int index() const { return channel_info_.index; }
+
+    uint64_t frame_number() const { return frame_counter_.load(); }
 
     channel_info get_consumer_channel_info() const { return channel_info_; }
 };
@@ -319,6 +349,7 @@ const output&                       video_channel::output() const { return impl_
 output&                             video_channel::output() { return impl_->output_; }
 spl::shared_ptr<frame_factory>      video_channel::frame_factory() { return impl_->image_mixer_; }
 int                                 video_channel::index() const { return impl_->index(); }
+uint64_t                            video_channel::frame_number() const { return impl_->frame_number(); }
 channel_info         video_channel::get_consumer_channel_info() const { return impl_->get_consumer_channel_info(); };
 core::monitor::state video_channel::state() const { return impl_->state_; }
 
@@ -327,6 +358,11 @@ std::shared_ptr<route> video_channel::route(int index, route_mode mode) { return
 void video_channel::schedule_at(uint64_t frame_number, std::function<void()> action)
 {
     impl_->schedule_at(frame_number, std::move(action));
+}
+
+void video_channel::set_on_deterministic_stall(std::function<void()> callback)
+{
+    impl_->set_on_deterministic_stall(std::move(callback));
 }
 
 }} // namespace caspar::core
