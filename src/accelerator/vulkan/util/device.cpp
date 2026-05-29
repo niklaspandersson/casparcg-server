@@ -26,6 +26,7 @@
 #include "command_context.h"
 #include "pipeline.h"
 #include "queue_manager.h"
+#include "queue_transfer.h"
 #include "texture.h"
 
 #include <common/array.h>
@@ -136,6 +137,11 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
     std::array<std::shared_ptr<pipeline>, 2> _pipelines;
 
+    // Shared 1x1 transparent-black texture handed out by empty_texture(). Plain
+    // (non-pooled) so its deleter does not capture `self` — a pooled texture
+    // held for the device lifetime would form a reference cycle with impl.
+    std::shared_ptr<texture> _empty_texture;
+
     // Recording/submission engine bound to the renderer queue. Owns the command
     // pool + timeline + recycled command buffers that used to live directly in
     // this struct (see command_context).
@@ -175,6 +181,28 @@ struct device::impl : public std::enable_shared_from_this<impl>
 #else
                                     .require_api_version(VK_API_VERSION_1_3);
 #endif
+
+        // Enable the surface-creation instance extensions when the loader reports
+        // them available, so consumers (e.g. the screen consumer) can present to a
+        // window. We keep the instance headless above so a missing windowing system
+        // (CI/headless hosts) still builds a valid instance; enabling the available
+        // extensions here is purely additive.
+        if (auto sys_info = vkb::SystemInfo::get_system_info()) {
+            const char* surface_extensions[] = {
+                "VK_KHR_surface",
+                "VK_EXT_metal_surface",
+                "VK_KHR_win32_surface",
+                "VK_KHR_xlib_surface",
+                "VK_KHR_xcb_surface",
+                "VK_KHR_wayland_surface",
+            };
+            for (const auto* ext : surface_extensions) {
+                if (sys_info->is_extension_available(ext)) {
+                    instance_builder.enable_extension(ext);
+                }
+            }
+        }
+
         auto instance_ret = instance_builder.build();
         if (!instance_ret) {
             CASPAR_THROW_EXCEPTION(caspar_exception()
@@ -300,6 +328,10 @@ struct device::impl : public std::enable_shared_from_this<impl>
             set_thread_name(L"Vulkan Device");
             io_context_.run();
         });
+
+        // Build the shared empty texture on the device thread — _render_ctx is
+        // thread-affine and is owned by that thread.
+        _empty_texture = dispatch_sync([this] { return create_empty_texture(); });
     }
 
     ~impl()
@@ -308,6 +340,8 @@ struct device::impl : public std::enable_shared_from_this<impl>
         thread_.join();
 
         _device.waitIdle();
+
+        _empty_texture.reset();
 
         for (auto& pool : host_pools_)
             pool.clear();
@@ -468,6 +502,9 @@ struct device::impl : public std::enable_shared_from_this<impl>
                 cmd);
         });
 
+        // Keep the tracked layout in sync so a GPU-direct consumer (which samples
+        // the rendered attachment on its own queue) knows what to barrier from.
+        tex->set_current_layout(vk::ImageLayout::eRenderingLocalRead);
         tex->set_depth(depth);
 
         auto ptr = tex.get();
@@ -550,6 +587,93 @@ struct device::impl : public std::enable_shared_from_this<impl>
         auto ptr = tex.get();
         return std::shared_ptr<texture>(
             ptr, [tex = std::move(tex), pool, self = shared_from_this()](texture*) mutable { pool->push(tex); });
+    }
+
+    // Allocate a dedicated 1x1 R8G8B8A8 texture, clear it to transparent black,
+    // and leave it in eShaderReadOnlyOptimal. Not drawn from the texture pool, so
+    // the returned handle has a plain deleter (no `self` capture). Runs on the
+    // device thread (records on _render_ctx).
+    std::shared_ptr<texture> create_empty_texture()
+    {
+        const auto format = vk::Format::eR8G8B8A8Unorm;
+        const auto range  = vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+
+        vk::ImageCreateInfo imageInfo{};
+        imageInfo.imageType     = vk::ImageType::e2D;
+        imageInfo.format        = format;
+        imageInfo.extent        = vk::Extent3D{1, 1, 1};
+        imageInfo.mipLevels     = 1;
+        imageInfo.arrayLayers   = 1;
+        imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+        imageInfo.samples       = vk::SampleCountFlagBits::e1;
+        imageInfo.tiling        = vk::ImageTiling::eOptimal;
+        imageInfo.usage         = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+
+        // The empty texture is a persistent, read-only 1x1 handed to every
+        // GPU-direct consumer regardless of which queue family it presents on.
+        // Make it CONCURRENT over all families that have created queues so those
+        // consumers can sample it without a per-frame ownership transfer of a
+        // shared persistent image (which would not work for >1 consumer family).
+        // The cost is negligible for a 1x1 — unlike the composited frame, which
+        // stays EXCLUSIVE and uses release_output/acquire_texture.
+        std::vector<uint32_t> families;
+        for (const auto& f : _queues->queue_families()) {
+            if (f.queues_created > 0)
+                families.push_back(f.family_index);
+        }
+        if (families.size() > 1) {
+            imageInfo.sharingMode           = vk::SharingMode::eConcurrent;
+            imageInfo.queueFamilyIndexCount = static_cast<uint32_t>(families.size());
+            imageInfo.pQueueFamilyIndices   = families.data();
+        } else {
+            imageInfo.sharingMode = vk::SharingMode::eExclusive;
+        }
+        auto image = _device.createImage(imageInfo);
+
+        auto memReq = _device.getImageMemoryRequirements(image);
+
+        vk::MemoryAllocateInfo allocInfo{};
+        allocInfo.allocationSize = memReq.size;
+        allocInfo.memoryTypeIndex =
+            findDedicatedMemoryType(memReq.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+        auto imageMemory = _device.allocateMemory(allocInfo);
+        _device.bindImageMemory(image, imageMemory, 0);
+
+        vk::ImageViewCreateInfo createInfo({}, image, vk::ImageViewType::e2D, format, vk::ComponentMapping(), range);
+        auto                    imageView = _device.createImageView(createInfo);
+
+        auto tex = std::make_shared<texture>(1, 1, 4, common::bit_depth::bit8, image, imageMemory, imageView, _device);
+
+        auto token = _render_ctx->record_and_submit([&](vk::CommandBuffer cmd) {
+            transitionImageLayout(tex->id(),
+                                  vk::ImageLayout::eUndefined,
+                                  vk::AccessFlagBits2::eNone,
+                                  vk::PipelineStageFlagBits2::eTopOfPipe,
+
+                                  vk::ImageLayout::eTransferDstOptimal,
+                                  vk::AccessFlagBits2::eTransferWrite,
+                                  vk::PipelineStageFlagBits2::eTransfer,
+                                  cmd);
+
+            vk::ClearColorValue clear(std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f});
+            cmd.clearColorImage(tex->id(), vk::ImageLayout::eTransferDstOptimal, clear, range);
+
+            transitionImageLayout(tex->id(),
+                                  vk::ImageLayout::eTransferDstOptimal,
+                                  vk::AccessFlagBits2::eTransferWrite,
+                                  vk::PipelineStageFlagBits2::eTransfer,
+
+                                  vk::ImageLayout::eShaderReadOnlyOptimal,
+                                  vk::AccessFlagBits2::eShaderRead,
+                                  vk::PipelineStageFlagBits2::eAllCommands,
+                                  cmd);
+        });
+
+        tex->set_current_layout(vk::ImageLayout::eShaderReadOnlyOptimal);
+        tex->note_write(token);
+
+        return tex;
     }
 
     std::shared_ptr<buffer> create_buffer(int size, bool write)
@@ -697,6 +821,138 @@ struct device::impl : public std::enable_shared_from_this<impl>
             auto ptr  = reinterpret_cast<uint8_t*>(buf->data());
             auto size = buf->size();
             return array<const uint8_t>(ptr, size, std::move(buf));
+        });
+    }
+
+    // Prepare the composited attachment for delivery. Always finalizes `target`
+    // to eShaderReadOnlyOptimal on the renderer queue (for GPU-direct consumers)
+    // and records the transition as a read so consumers wait on it via
+    // read_dependencies(). When need_host is set, the frame is additionally
+    // copied into a scratch attachment and read back to host — keeping `target`
+    // and the readback source on separate images so they hold independent
+    // layouts. Returns the host bytes, or an empty array when no host copy is
+    // requested.
+    std::future<array<const uint8_t>> finalize_output(const std::shared_ptr<texture>& target, bool need_host)
+    {
+        auto f = dispatch_async([this, target, need_host]()
+                                    -> std::tuple<std::shared_ptr<buffer>, std::shared_ptr<texture>, completion_token> {
+            std::shared_ptr<buffer>  buf;
+            std::shared_ptr<texture> scratch;
+            if (need_host) {
+                scratch = create_attachment(target->width(), target->height(), target->depth(), 4);
+                buf     = create_buffer(target->size(), false);
+            }
+
+            vk::ImageSubresourceLayers layers(vk::ImageAspectFlagBits::eColor, 0, 0, 1);
+            vk::Extent3D extent(static_cast<uint32_t>(target->width()), static_cast<uint32_t>(target->height()), 1);
+
+            auto token = _render_ctx->record_and_submit([&](vk::CommandBuffer cmd) {
+                if (need_host) {
+                    // target: rendering-local-read -> transfer-src (copy source).
+                    transitionImageLayout(target->id(),
+                                          vk::ImageLayout::eRenderingLocalRead,
+                                          vk::AccessFlagBits2::eColorAttachmentWrite,
+                                          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                                          vk::ImageLayout::eTransferSrcOptimal,
+                                          vk::AccessFlagBits2::eTransferRead,
+                                          vk::PipelineStageFlagBits2::eTransfer,
+                                          cmd);
+
+                    // scratch (fresh attachment): -> transfer-dst (copy dest).
+                    transitionImageLayout(scratch->id(),
+                                          vk::ImageLayout::eRenderingLocalRead,
+                                          vk::AccessFlagBits2::eNone,
+                                          vk::PipelineStageFlagBits2::eTopOfPipe,
+                                          vk::ImageLayout::eTransferDstOptimal,
+                                          vk::AccessFlagBits2::eTransferWrite,
+                                          vk::PipelineStageFlagBits2::eTransfer,
+                                          cmd);
+
+                    vk::ImageCopy copy(layers, vk::Offset3D{0, 0, 0}, layers, vk::Offset3D{0, 0, 0}, extent);
+                    cmd.copyImage(target->id(),
+                                  vk::ImageLayout::eTransferSrcOptimal,
+                                  scratch->id(),
+                                  vk::ImageLayout::eTransferDstOptimal,
+                                  copy);
+
+                    // target -> shader-read for GPU-direct consumers.
+                    transitionImageLayout(target->id(),
+                                          vk::ImageLayout::eTransferSrcOptimal,
+                                          vk::AccessFlagBits2::eTransferRead,
+                                          vk::PipelineStageFlagBits2::eTransfer,
+                                          vk::ImageLayout::eShaderReadOnlyOptimal,
+                                          vk::AccessFlagBits2::eShaderRead,
+                                          vk::PipelineStageFlagBits2::eAllCommands,
+                                          cmd);
+
+                    // scratch: transfer-dst -> transfer-src, copy to host buffer.
+                    transitionImageLayout(scratch->id(),
+                                          vk::ImageLayout::eTransferDstOptimal,
+                                          vk::AccessFlagBits2::eTransferWrite,
+                                          vk::PipelineStageFlagBits2::eTransfer,
+                                          vk::ImageLayout::eTransferSrcOptimal,
+                                          vk::AccessFlagBits2::eTransferRead,
+                                          vk::PipelineStageFlagBits2::eTransfer,
+                                          cmd);
+
+                    vk::BufferImageCopy region(0, 0, 0, layers, vk::Offset3D{0, 0, 0}, extent);
+                    cmd.copyImageToBuffer(scratch->id(), vk::ImageLayout::eTransferSrcOptimal, buf->id(), region);
+                } else {
+                    // No host copy: just finalize the layout for GPU-direct use.
+                    transitionImageLayout(target->id(),
+                                          vk::ImageLayout::eRenderingLocalRead,
+                                          vk::AccessFlagBits2::eColorAttachmentWrite,
+                                          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                                          vk::ImageLayout::eShaderReadOnlyOptimal,
+                                          vk::AccessFlagBits2::eShaderRead,
+                                          vk::PipelineStageFlagBits2::eAllCommands,
+                                          cmd);
+                }
+            });
+
+            target->set_current_layout(vk::ImageLayout::eShaderReadOnlyOptimal);
+            target->set_owner_family(_renderer_queue->family_index());
+            target->note_read(token);
+
+            return {buf, scratch, token};
+        });
+
+        if (!need_host) {
+            // Drop the finalize result (layout only) and yield an empty host array.
+            return std::async(std::launch::deferred, [f = std::move(f)]() mutable {
+                f.get();
+                return array<const uint8_t>();
+            });
+        }
+
+        return std::async(std::launch::deferred, [this, f = std::move(f)]() mutable {
+            auto result = f.get(); // keeps the scratch attachment alive until the copy retires
+            auto buf    = std::move(std::get<0>(result));
+            if (!_render_ctx->wait(std::get<2>(result))) {
+                CASPAR_LOG(warning) << L"[Vulkan] Timeout waiting for output readback";
+            }
+
+            auto ptr  = reinterpret_cast<uint8_t*>(buf->data());
+            auto size = buf->size();
+            return array<const uint8_t>(ptr, size, std::move(buf));
+        });
+    }
+
+    // Release ownership of `target` from the renderer queue to `dst` (a consumer
+    // queue on another family). Records the release barrier on the renderer
+    // queue's context and returns the transfer token; the consumer completes it
+    // with acquire_texture on its own context before sampling. Runs on the
+    // device thread (owns _render_ctx).
+    queue_ownership_transfer release_output(const std::shared_ptr<texture>&      target,
+                                            const std::shared_ptr<vulkan_queue>& dst)
+    {
+        return dispatch_sync([&] {
+            return release_texture(*_render_ctx,
+                                   *dst,
+                                   *target,
+                                   vk::ImageLayout::eShaderReadOnlyOptimal,
+                                   vk::PipelineStageFlagBits2::eAllCommands,
+                                   vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eShaderRead);
         });
     }
 
@@ -870,7 +1126,9 @@ std::shared_ptr<texture> device::create_texture(int width, int height, int strid
 {
     return impl_->create_texture(width, height, stride, depth, true);
 }
-array<uint8_t> device::create_array(int size) { return impl_->create_array(size); }
+std::shared_ptr<texture> device::empty_texture() const { return impl_->_empty_texture; }
+std::shared_ptr<buffer>  device::create_buffer(int size, bool write) { return impl_->create_buffer(size, write); }
+array<uint8_t>           device::create_array(int size) { return impl_->create_array(size); }
 std::future<std::shared_ptr<texture>>
 device::copy_async(const array<const uint8_t>& source, int width, int height, int stride, common::bit_depth depth)
 {
@@ -879,6 +1137,15 @@ device::copy_async(const array<const uint8_t>& source, int width, int height, in
 std::future<array<const uint8_t>> device::copy_async(const std::shared_ptr<texture>& source)
 {
     return impl_->copy_async(source);
+}
+std::future<array<const uint8_t>> device::finalize_output(const std::shared_ptr<texture>& target, bool need_host)
+{
+    return impl_->finalize_output(target, need_host);
+}
+queue_ownership_transfer device::release_output(const std::shared_ptr<texture>&      target,
+                                                const std::shared_ptr<vulkan_queue>& dst)
+{
+    return impl_->release_output(target, dst);
 }
 void device::dispatch(std::function<void()> func) { boost::asio::dispatch(impl_->io_context_, std::move(func)); }
 std::wstring                 device::version() const { return impl_->version(); }

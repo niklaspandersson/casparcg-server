@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "completion_token.h"
 #include "queue_manager.h" // queue_ownership_transfer
 
 #include <vulkan/vulkan.hpp>
@@ -54,11 +55,13 @@ queue_ownership_transfer release_texture(command_context&        src_cc,
 // Consumer side. Records the matching acquire barrier on dst_cc waiting on
 // token.semaphore, and keeps the semaphore alive until that submit retires.
 // dst_stage/dst_access describe the first use on the destination queue. Consumes
-// the token (its semaphore handle is cleared on return).
-void acquire_texture(command_context&          dst_cc,
-                     queue_ownership_transfer& token,
-                     texture&                  tex,
-                     vk::PipelineStageFlags2   dst_stage,
-                     vk::AccessFlags2          dst_access);
+// the token (its semaphore handle is cleared on return). Returns the acquire
+// submit's completion token, so a later submit on the same queue (e.g. the draw
+// that samples the texture) can order itself after the ownership acquire.
+completion_token acquire_texture(command_context&          dst_cc,
+                                 queue_ownership_transfer& token,
+                                 texture&                  tex,
+                                 vk::PipelineStageFlags2   dst_stage,
+                                 vk::AccessFlags2          dst_access);
 
 }}} // namespace caspar::accelerator::vulkan

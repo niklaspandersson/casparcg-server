@@ -24,7 +24,13 @@
 #include <boost/property_tree/ptree_fwd.hpp>
 #include <memory>
 
-#include <vk_mem_alloc.h>
+#include <vulkan/vulkan.h>
+
+// Forward-declare the VMA allocator handle so this header stays decoupled from
+// vk_mem_alloc.h (which is linked PRIVATE to the accelerator target). Consumers
+// outside the accelerator obtain buffers via device::create_buffer and only
+// touch id()/data()/size().
+typedef struct VmaAllocator_T* VmaAllocator;
 
 namespace caspar { namespace accelerator { namespace vulkan {
 

@@ -168,6 +168,16 @@ IF(ENABLE_VULKAN)
 			DOWNLOAD_DIR ${CASPARCG_DOWNLOAD_CACHE}
 	)
 	FetchContent_MakeAvailable(vma)
+
+	# GLFW (window + Vulkan surface for the screen consumer), built from source.
+	set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+	set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+	set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+	FetchContent_Declare(glfw3
+			URL https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip
+			DOWNLOAD_DIR ${CASPARCG_DOWNLOAD_CACHE}
+	)
+	FetchContent_MakeAvailable(glfw3)
 ENDIF()
 
 # SFML

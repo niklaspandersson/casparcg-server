@@ -31,7 +31,7 @@
 
 namespace caspar { namespace accelerator { namespace vulkan {
 
-class texture final
+class texture final : public core::texture
 {
   public:
     texture(int               width,
@@ -50,6 +50,11 @@ class texture final
     texture& operator=(texture&& other);
 
     vk::ImageView view() const;
+
+    // core::texture interface. No-ops on Vulkan: there is no global texture bind
+    // point — sampling is expressed via descriptor sets at draw time.
+    void bind(int index) override;
+    void unbind() override;
 
     int               width() const;
     int               height() const;

@@ -123,11 +123,11 @@ queue_ownership_transfer release_texture(command_context&        src_cc,
     return token;
 }
 
-void acquire_texture(command_context&          dst_cc,
-                     queue_ownership_transfer& token,
-                     texture&                  tex,
-                     vk::PipelineStageFlags2   dst_stage,
-                     vk::AccessFlags2          dst_access)
+completion_token acquire_texture(command_context&          dst_cc,
+                                 queue_ownership_transfer& token,
+                                 texture&                  tex,
+                                 vk::PipelineStageFlags2   dst_stage,
+                                 vk::AccessFlags2          dst_access)
 {
     CASPAR_VERIFY(token.semaphore);
 
@@ -166,6 +166,8 @@ void acquire_texture(command_context&          dst_cc,
 
     token.semaphore = vk::Semaphore{};
     token.semaphore_owner.reset();
+
+    return completion;
 }
 
 }}} // namespace caspar::accelerator::vulkan

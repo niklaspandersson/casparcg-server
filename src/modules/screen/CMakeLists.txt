@@ -2,6 +2,9 @@ cmake_minimum_required (VERSION 3.28)
 project (screen)
 
 set(SOURCES
+	util/config.cpp
+	util/config.h
+
 	consumer/screen_consumer.cpp
 	consumer/screen_consumer.h
 
@@ -12,8 +15,8 @@ set(SOURCES
 	screen.h
 )
 
-bin2c("consumer/screen.vert" "consumer_screen_vertex.h" "caspar::screen" "vertex_shader")
-bin2c("consumer/screen.frag" "consumer_screen_fragment.h" "caspar::screen" "fragment_shader")
+	bin2c("consumer/screen.vert" "consumer_screen_vertex.h" "caspar::screen" "vertex_shader")
+	bin2c("consumer/screen.frag" "consumer_screen_fragment.h" "caspar::screen" "fragment_shader")
 
 if (MSVC)
 elseif(APPLE)
@@ -24,16 +27,71 @@ else ()
 	)
 endif ()
 
+# Vulkan screen consumer (all platforms when Vulkan is enabled). Presents using
+# the shared accelerator Vulkan device.
+if (ENABLE_VULKAN)
+	find_program(glslc_executable NAMES glslc HINTS Vulkan::glslc)
+	set(SHADER_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_consumer)
+	set(SHADER_BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_consumer)
+
+	file(GLOB SHADERS
+		${SHADER_SOURCE_DIR}/screen_vk.frag
+		${SHADER_SOURCE_DIR}/screen_vk.vert)
+
+	foreach(source IN LISTS SHADERS)
+		get_filename_component(FILENAME ${source} NAME)
+		add_custom_command(
+			COMMAND
+				${glslc_executable}
+				#      -MD -MF ${SHADER_BINARY_DIR}/${FILENAME}.d
+				-o ${SHADER_BINARY_DIR}/${FILENAME}.spv
+				${source}
+			OUTPUT ${SHADER_BINARY_DIR}/${FILENAME}.spv
+			DEPENDS ${source} ${SHADER_BINARY_DIR}
+			COMMENT "Compiling ${FILENAME}"
+		)
+		list(APPEND SPV_SHADERS ${SHADER_BINARY_DIR}/${FILENAME}.spv)
+	endforeach()
+
+	add_custom_target(vulkan_screen_shaders ALL DEPENDS ${SPV_SHADERS})
+
+	bin2c("vulkan_consumer/screen_vk.vert.spv" "screen_vk_vertex.h" "caspar::screen" "vertex_shader_spv")
+	bin2c("vulkan_consumer/screen_vk.frag.spv" "screen_vk_fragment.h" "caspar::screen" "fragment_shader_spv")
+
+	list(APPEND SOURCES
+		vulkan_consumer/screen_consumer_vk.cpp
+		vulkan_consumer/screen_consumer_vk.h
+		
+		vulkan_consumer/util/render_pipeline.cpp
+		vulkan_consumer/util/render_pipeline.h
+		vulkan_consumer/util/swapchain.cpp
+		vulkan_consumer/util/swapchain.h
+		vulkan_consumer/util/vk_check.h
+		vulkan_consumer/util/window.h
+		vulkan_consumer/util/window.cpp
+
+		screen_vk_vertex.h
+		screen_vk_fragment.h
+	)
+endif ()
+
 casparcg_add_module_project(screen
 	SOURCES ${SOURCES}
 	INIT_FUNCTION "screen::init"
+	VULKAN_REQUIREMENTS_FUNCTION "screen::register_vulkan_requirements"
 )
 target_include_directories(screen PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}
     ${FFMPEG_INCLUDE_PATH}
 )
 target_link_libraries(screen PRIVATE accelerator ffmpeg GLEW::glew sfml-system sfml-window)
+if (ENABLE_VULKAN)
+	target_link_libraries(screen PRIVATE glfw Vulkan::Headers vk-bootstrap::vk-bootstrap)
+	target_compile_definitions(screen PUBLIC VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
+	add_dependencies(screen vulkan_screen_shaders)
+endif ()
 
 set_target_properties(screen PROPERTIES FOLDER modules)
 source_group(sources\\consumer consumer/*)
+source_group(sources\\vulkan_consumer vulkan_consumer/*)
 source_group(sources ./*)

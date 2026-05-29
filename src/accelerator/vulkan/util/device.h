@@ -37,6 +37,7 @@ namespace caspar { namespace accelerator { namespace vulkan {
 
 struct draw_params;
 struct queue_request;
+struct queue_ownership_transfer;
 
 class image_kernel;
 class vulkan_queue;
@@ -78,11 +79,33 @@ class device final
     std::shared_ptr<class texture>
     create_attachment(int width, int height, common::bit_depth depth, uint32_t components_count);
     std::shared_ptr<class texture> create_texture(int width, int height, int stride, common::bit_depth depth);
+    std::shared_ptr<class buffer>  create_buffer(int size, bool write);
+
+    // A shared 1x1 transparent-black texture, created at device setup and kept
+    // alive for the device's lifetime. Used as the GPU-side payload when the
+    // mixer bypasses the GPU for an empty frame, so consumers that sample the
+    // rendered texture directly always get a valid (cleared) texture.
+    std::shared_ptr<class texture> empty_texture() const;
     array<uint8_t>                 create_array(int size);
 
     std::future<std::shared_ptr<class texture>>
     copy_async(const array<const uint8_t>& source, int width, int height, int stride, common::bit_depth depth);
     std::future<array<const uint8_t>> copy_async(const std::shared_ptr<class texture>& source);
+
+    // Finalize the composited attachment for delivery: transitions `target` to a
+    // shader-read layout for GPU-direct consumers (recorded as a read so they can
+    // wait on texture::read_dependencies()), and — only when need_host is set —
+    // copies it into a scratch texture read back to host. Returns the host bytes,
+    // or an empty array when no host copy is needed.
+    std::future<array<const uint8_t>> finalize_output(const std::shared_ptr<class texture>& target, bool need_host);
+
+    // Release ownership of a finalized output texture from the renderer queue to
+    // a consumer queue on another family, transitioning it to shader-read. The
+    // consumer completes the hand-off with acquire_texture() before sampling.
+    // Only needed when the consumer's queue family differs from the renderer's
+    // (compare texture::owner_family()); same-family consumers skip this.
+    struct queue_ownership_transfer release_output(const std::shared_ptr<class texture>&      target,
+                                                   const std::shared_ptr<class vulkan_queue>& dst);
     template <typename Func>
     auto dispatch_async(Func&& func)
     {
