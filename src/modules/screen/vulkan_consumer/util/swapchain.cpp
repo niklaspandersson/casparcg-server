@@ -67,7 +67,8 @@ struct swapchain::impl
          vk::Queue          queue,
          uint32_t           queue_family_index,
          GLFWwindow*        window,
-         bool               vsync)
+         bool               vsync,
+         vk::SurfaceKHR     pre_created_surface)
         : instance_(instance)
         , physical_device_(physical_device)
         , device_(device)
@@ -76,7 +77,12 @@ struct swapchain::impl
         , window_(window)
         , vsync_(vsync)
     {
-        create_surface();
+        if (pre_created_surface) {
+            set_surface(pre_created_surface);
+        } else {
+            create_surface();
+        }
+
         create_swapchain();
         create_image_views();
         create_sync_objects();
@@ -106,6 +112,15 @@ struct swapchain::impl
             CASPAR_THROW_EXCEPTION(vk_exception() << msg_info("Failed to create Vulkan window surface"));
         }
         surface_ = vk::SurfaceKHR(raw_surface);
+
+        // Verify the queue family supports presentation
+        if (!physical_device_.getSurfaceSupportKHR(queue_family_index_, surface_)) {
+            CASPAR_THROW_EXCEPTION(vk_exception() << msg_info("Queue family does not support presentation to surface"));
+        }
+    }
+    void set_surface(vk::SurfaceKHR surface)
+    {
+        surface_ = surface;
 
         // Verify the queue family supports presentation
         if (!physical_device_.getSurfaceSupportKHR(queue_family_index_, surface_)) {
@@ -350,8 +365,10 @@ swapchain::swapchain(vk::Instance       instance,
                      vk::Queue          queue,
                      uint32_t           queue_family_index,
                      GLFWwindow*        window,
-                     bool               vsync)
-    : impl_(std::make_unique<impl>(instance, physical_device, device, queue, queue_family_index, window, vsync))
+                     bool               vsync,
+                     vk::SurfaceKHR     pre_created_surface)
+    : impl_(std::make_unique<
+            impl>(instance, physical_device, device, queue, queue_family_index, window, vsync, pre_created_surface))
 {
 }
 

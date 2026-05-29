@@ -58,6 +58,7 @@ class swapchain final
      * @param queue_family_index Queue family index for presentation
      * @param window GLFW window pointer
      * @param vsync Enable vertical sync
+     * @param pre_created_surface Optional pre-created VkSurfaceKHR (for macOS Metal layer control)
      */
     swapchain(vk::Instance       instance,
               vk::PhysicalDevice physical_device,
@@ -65,7 +66,8 @@ class swapchain final
               vk::Queue          queue,
               uint32_t           queue_family_index,
               GLFWwindow*        window,
-              bool               vsync);
+              bool               vsync,
+              vk::SurfaceKHR     pre_created_surface = nullptr);
     ~swapchain();
 
     swapchain(const swapchain&)            = delete;

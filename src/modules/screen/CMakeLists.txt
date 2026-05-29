@@ -5,18 +5,23 @@ set(SOURCES
 	util/config.cpp
 	util/config.h
 
-	consumer/screen_consumer.cpp
-	consumer/screen_consumer.h
-
-	consumer_screen_vertex.h
-	consumer_screen_fragment.h
-
 	screen.cpp
 	screen.h
 )
 
+# OpenGL screen consumer (Windows/Linux). macOS has no usable desktop OpenGL.
+if (NOT APPLE)
+	list(APPEND SOURCES
+		consumer/screen_consumer.cpp
+		consumer/screen_consumer.h
+
+		consumer_screen_vertex.h
+		consumer_screen_fragment.h
+	)
+
 	bin2c("consumer/screen.vert" "consumer_screen_vertex.h" "caspar::screen" "vertex_shader")
 	bin2c("consumer/screen.frag" "consumer_screen_fragment.h" "caspar::screen" "fragment_shader")
+endif ()
 
 if (MSVC)
 elseif(APPLE)
@@ -68,11 +73,16 @@ if (ENABLE_VULKAN)
 		vulkan_consumer/util/swapchain.h
 		vulkan_consumer/util/vk_check.h
 		vulkan_consumer/util/window.h
-		vulkan_consumer/util/window.cpp
 
 		screen_vk_vertex.h
 		screen_vk_fragment.h
 	)
+
+	if (APPLE)
+		list(APPEND SOURCES vulkan_consumer/util/window_mac.mm)
+	else ()
+		list(APPEND SOURCES vulkan_consumer/util/window_generic.cpp)
+	endif ()
 endif ()
 
 casparcg_add_module_project(screen
@@ -84,11 +94,19 @@ target_include_directories(screen PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}
     ${FFMPEG_INCLUDE_PATH}
 )
-target_link_libraries(screen PRIVATE accelerator ffmpeg GLEW::glew sfml-system sfml-window)
+target_link_libraries(screen PRIVATE accelerator ffmpeg)
+
+if (NOT APPLE)
+	target_link_libraries(screen PRIVATE GLEW::glew sfml-system sfml-window)
+endif ()
+
 if (ENABLE_VULKAN)
 	target_link_libraries(screen PRIVATE glfw Vulkan::Headers vk-bootstrap::vk-bootstrap)
 	target_compile_definitions(screen PUBLIC VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
 	add_dependencies(screen vulkan_screen_shaders)
+	if (APPLE)
+		target_link_libraries(screen PRIVATE "-framework Cocoa" "-framework Metal" "-framework QuartzCore")
+	endif ()
 endif ()
 
 set_target_properties(screen PROPERTIES FOLDER modules)

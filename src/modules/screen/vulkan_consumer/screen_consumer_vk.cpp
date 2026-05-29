@@ -28,6 +28,7 @@
 #include "util/swapchain.h"
 
 #include <accelerator/vulkan/util/buffer.h>
+#include <accelerator/vulkan/util/command_context.h>
 #include <accelerator/vulkan/util/device.h>
 #include <accelerator/vulkan/util/queue_manager.h>
 #include <accelerator/vulkan/util/queue_transfer.h>
@@ -68,12 +69,12 @@ namespace caspar { namespace screen { namespace vulkan {
 
 struct screen_consumer_vk
 {
-    const configuration                                config_;
-    core::video_format_desc                            format_desc_;
-    int                                                channel_index_;
-    std::shared_ptr<accelerator::vulkan::device>       device_;
-    std::shared_ptr<accelerator::vulkan::vulkan_queue> queue_;
-    VkCommandPool                                      command_pool_ = VK_NULL_HANDLE;
+    const configuration                                   config_;
+    core::video_format_desc                               format_desc_;
+    int                                                   channel_index_;
+    std::shared_ptr<accelerator::vulkan::device>          device_;
+    std::shared_ptr<accelerator::vulkan::vulkan_queue>    queue_;
+    std::unique_ptr<accelerator::vulkan::command_context> command_ctx_;
 
     int screen_width_  = format_desc_.width;
     int screen_height_ = format_desc_.height;
@@ -245,8 +246,12 @@ struct screen_consumer_vk
         command_ctx_ = std::make_unique<accelerator::vulkan::command_context>(vkdevice, queue_);
         auto pool    = command_ctx_->pool();
 
+        // macOS need to to control how surface is created, so create it from window instead of swapchain.
+        // This returns VK_NULL_HANDLE on other platforms, and swapchain falls back to creating the surface itself.
+        auto surface = window_->create_surface(instance);
+
         swapchain_ = std::make_unique<swapchain>(
-            instance, physical, vkdevice, queue, queue_->family_index(), window_->handle(), config_.vsync);
+            instance, physical, vkdevice, queue, queue_->family_index(), window_->handle(), config_.vsync, surface);
 
         render_pipeline_ = std::make_unique<render_pipeline>(vkdevice, physical, pool, queue, *swapchain_);
 
@@ -390,6 +395,11 @@ struct screen_consumer_vk
             swapchain_->next_frame();
         }
 
+#ifdef __APPLE__
+        if (!first_frame_presented_.exchange(true)) {
+            window_->nudge_for_first_frame();
+        }
+#endif
         graph_->set_value("tick-time", tick_timer_.elapsed() * format_desc_.fps * 0.5);
         tick_timer_.restart();
     }

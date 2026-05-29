@@ -22,6 +22,8 @@
 #include <memory>
 #include <string>
 
+#include <vulkan/vulkan.hpp>
+
 struct GLFWwindow;
 
 namespace caspar { namespace screen { namespace vulkan {
@@ -60,6 +62,12 @@ class screen_window
     bool poll();
 
     void framebuffer_size(int& width, int& height);
+
+    vk::SurfaceKHR create_surface(vk::Instance vk_instance);
+#ifdef __APPLE__
+    // macOS workaround: nudge the window once so the first presented frame shows.
+    void nudge_for_first_frame();
+#endif
 
   private:
     struct impl;

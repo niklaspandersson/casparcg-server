@@ -28,7 +28,9 @@
 #include <string>
 #include <vector>
 
+#ifndef __APPLE__
 #include "consumer/screen_consumer.h"
+#endif
 
 #ifdef ENABLE_VULKAN
 #include "vulkan_consumer/screen_consumer_vk.h"
@@ -60,7 +62,11 @@ void init(const core::module_dependencies& dependencies)
                 return vulkan::create_consumer(vk_device, params, format_repository, channels, channel_info);
 #endif
 
+#ifndef __APPLE__
             return create_consumer(params, format_repository, channels, channel_info);
+#else
+            return core::frame_consumer::empty();
+#endif
         });
 
     dependencies.consumer_registry->register_preconfigured_consumer_factory(
@@ -75,7 +81,11 @@ void init(const core::module_dependencies& dependencies)
                     vk_device, ptree, format_repository, channels, channel_info);
 #endif
 
+#ifndef __APPLE__
             return create_preconfigured_consumer(ptree, format_repository, channels, channel_info);
+#else
+            return core::frame_consumer::empty();
+#endif
         });
 }
 
