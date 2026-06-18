@@ -54,6 +54,7 @@
 #include <boost/stacktrace.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <thread>
 
 #include <clocale>
@@ -110,6 +111,13 @@ auto run(const std::wstring& config_file_name, std::atomic<bool>& should_wait_fo
 
     caspar_server->start();
 
+    // Optionally shut the server down once stdin reaches EOF and no consumers remain active.
+    // This enables a headless recording process: pipe a SCHEDULE script in, render to a file
+    // consumer, and let the process terminate on its own once the recording has finished.
+    const bool shutdown_on_eof = env::properties().get(L"configuration.shutdown-on-eof", false);
+    const auto eof_idle_grace =
+        std::chrono::milliseconds(env::properties().get(L"configuration.shutdown-on-eof-grace-ms", 2000));
+
     // Create a dummy client which prints amcp responses to console.
     auto console_client = spl::make_shared<IO::ConsoleClientInfo>();
 
@@ -134,6 +142,22 @@ auto run(const std::wstring& config_file_name, std::atomic<bool>& should_wait_fo
             if (!std::getline(std::cin, cmd1)) { // TODO: It's blocking...
                 if (std::cin.eof()) {
                     std::cin.clear();
+                    if (shutdown_on_eof) {
+                        // Keep running while any channel still has active consumers (e.g. a
+                        // SCHEDULE recording in progress), then shut down. A grace window
+                        // covers the fact that AMCP commands queued just before EOF (such as a
+                        // trailing SCHEDULE COMMIT) attach their consumers asynchronously.
+                        auto last_active = std::chrono::steady_clock::now();
+                        while (true) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                            if (caspar_server->active_consumer_count() > 0)
+                                last_active = std::chrono::steady_clock::now();
+                            else if (std::chrono::steady_clock::now() - last_active >= eof_idle_grace)
+                                break;
+                        }
+                        CASPAR_LOG(info) << L"stdin reached EOF and no consumers remain active - shutting down.";
+                        shutdown(false); // false to not restart
+                    }
                     break;
                 }
                 std::cin.clear();

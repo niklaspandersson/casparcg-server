@@ -35,6 +35,9 @@ class server final
     void                                                     start();
     spl::shared_ptr<protocol::amcp::amcp_command_repository> get_amcp_command_repository() const;
 
+    // Number of currently-attached consumers across all physical and virtual channels.
+    size_t active_consumer_count() const;
+
   private:
     struct impl;
     std::shared_ptr<impl> impl_;
