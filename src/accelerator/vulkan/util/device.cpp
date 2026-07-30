@@ -103,9 +103,9 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
     std::unique_ptr<class transfer> transfer_;
 
-    explicit impl(const std::vector<vulkan_requirements_fn>& requirements)
+    explicit impl(const std::vector<vulkan_requirements_fn>& requirements, int gpu_index = -1)
     {
-        CASPAR_LOG(info) << L"Initializing Vulkan Device.";
+        CASPAR_LOG(info) << L"Initializing Vulkan Device" << (gpu_index >= 0 ? L" (GPU " + std::to_wstring(gpu_index) + L")" : L"") << L".";
 
         auto instance_builder = vkb::InstanceBuilder()
 #ifdef _DEBUG
@@ -126,9 +126,9 @@ struct device::impl : public std::enable_shared_from_this<impl>
                                     .require_api_version(VK_API_VERSION_1_3);
 #endif
 
-        // Enable the surface-creation instance extensions when the loader reports
-        // them available, so consumers (e.g. the screen consumer) can present to a
-        // window. Enabling the available extensions here is purely additive.
+        // Enable presentation-related instance extensions when the loader reports
+        // them available, so consumers (e.g. the screen consumer, vulkan_output) can
+        // present to a window or direct-to-display. Purely additive.
         if (auto sys_info = vkb::SystemInfo::get_system_info()) {
             const char* surface_extensions[] = {
                 "VK_KHR_surface",
@@ -137,6 +137,9 @@ struct device::impl : public std::enable_shared_from_this<impl>
                 "VK_KHR_xlib_surface",
                 "VK_KHR_xcb_surface",
                 "VK_KHR_wayland_surface",
+                "VK_KHR_display",
+                "VK_KHR_get_display_properties2",
+                "VK_EXT_direct_mode_display",
             };
             for (const auto* ext : surface_extensions) {
                 if (sys_info->is_extension_available(ext)) {
@@ -178,12 +181,44 @@ struct device::impl : public std::enable_shared_from_this<impl>
                            .add_required_extension(VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME)
                            .add_required_extension_features(localReadFeatures)
                            .prefer_gpu_device_type(vkb::PreferredDeviceType::discrete)
-                           .select();
+                           .select_devices();
         if (!gpu_res) {
             CASPAR_THROW_EXCEPTION(caspar_exception()
                                    << msg_info("Failed to select physical device: " + gpu_res.error().message()));
         }
-        _vkb_physical_device = gpu_res.value();
+
+        auto& candidates = gpu_res.value();
+        if (candidates.empty()) {
+            CASPAR_THROW_EXCEPTION(caspar_exception() << msg_info("No suitable Vulkan GPUs found"));
+        }
+
+        // Log GPU topology (all suitable devices)
+        CASPAR_LOG(info) << L"[vulkan] GPU topology: " << candidates.size() << L" suitable device(s):";
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            auto type_str = [](VkPhysicalDeviceType t) {
+                switch (t) {
+                    case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   return "discrete";
+                    case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return "integrated";
+                    case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    return "virtual";
+                    case VK_PHYSICAL_DEVICE_TYPE_CPU:            return "cpu";
+                    default:                                     return "other";
+                }
+            };
+            CASPAR_LOG(info) << L"[vulkan]   [" << i << L"] "
+                             << candidates[i].properties.deviceName
+                             << " (" << type_str(candidates[i].properties.deviceType) << ")";
+        }
+
+        // Select by gpu_index if specified, otherwise use first (preferred discrete)
+        if (gpu_index >= 0 && gpu_index < static_cast<int>(candidates.size())) {
+            _vkb_physical_device = candidates[gpu_index];
+        } else if (gpu_index >= 0) {
+            CASPAR_LOG(warning) << L"[accelerator] GPU index " << gpu_index << L" out of range ("
+                                << candidates.size() << L" suitable devices). Using GPU 0.";
+            _vkb_physical_device = candidates[0];
+        } else {
+            _vkb_physical_device = candidates[0];
+        }
 
         CASPAR_LOG(info) << "Selected Vulkan device: " << _vkb_physical_device.properties.deviceName;
 
@@ -470,8 +505,8 @@ struct device::impl : public std::enable_shared_from_this<impl>
     }
 };
 
-device::device(const std::vector<vulkan_requirements_fn>& requirements)
-    : impl_(new impl(requirements))
+device::device(const std::vector<vulkan_requirements_fn>& requirements, int gpu_index)
+    : impl_(new impl(requirements, gpu_index))
 {
     // Created after impl_ is set so the transfer service can build its
     // command_context off this fully-constructed device's queue.
