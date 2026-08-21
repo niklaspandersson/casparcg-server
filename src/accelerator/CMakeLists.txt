@@ -50,6 +50,7 @@ IF(ENABLE_VULKAN)
 		vulkan/util/pipeline.cpp
 		vulkan/util/renderpass.cpp
 		vulkan/util/texture.cpp
+		vulkan/util/transfer.cpp
 		vulkan/util/matrix.cpp
 		vulkan/util/transforms.cpp
 	)
@@ -68,6 +69,7 @@ IF(ENABLE_VULKAN)
 		vulkan/util/draw_params.h
 		vulkan/util/pipeline.h
 		vulkan/util/texture.h
+		vulkan/util/transfer.h
 		vulkan/util/matrix.h
 		vulkan/util/transforms.h
 		vulkan/util/uniform_block.h
