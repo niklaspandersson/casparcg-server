@@ -22,14 +22,21 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 
 #include <vulkan/vulkan.hpp>
 
 namespace caspar { namespace accelerator { namespace vulkan {
 
 // A single VkQueue together with the family it was created from. Mirrors
-// vk::Queue::submit so call sites stop passing raw handles around. Single
-// queue, single thread for now: no internal synchronization.
+// vk::Queue::submit so call sites stop passing raw handles around.
+//
+// Internally synchronized: vkQueueSubmit requires external synchronization of
+// the VkQueue, and this one queue is shared by every submitter (the transfer
+// command_context and the render ring, across all channel threads). submit()
+// holds a mutex so those submits serialize. This is the queue's own lock; the
+// transfer command_context guards its own pool/ring with a separate lock (see
+// command_context).
 class vulkan_queue final
 {
   public:
@@ -44,11 +51,17 @@ class vulkan_queue final
 
     // The raw queue handle, for submitters that need vkQueueSubmit2 (binary +
     // timeline semaphore mix) or vkQueuePresentKHR, which submit() does not wrap.
+    // Such callers must hold scoped_lock() to honour the queue's external sync.
     vk::Queue vk_queue() const { return queue_; }
 
+    // Hold this while submitting through vk_queue() directly, so those submits
+    // serialize against the ones going through submit().
+    std::unique_lock<std::mutex> scoped_lock() { return std::unique_lock<std::mutex>(mutex_); }
+
   private:
-    vk::Queue queue_;
-    uint32_t  family_index_;
+    vk::Queue  queue_;
+    uint32_t   family_index_;
+    std::mutex mutex_;
 };
 
 }}} // namespace caspar::accelerator::vulkan
