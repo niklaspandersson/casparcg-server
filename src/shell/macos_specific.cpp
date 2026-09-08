@@ -28,6 +28,11 @@
 
 namespace caspar {
 
+void setup_process_scheduling()
+{
+    // Nothing to do, macOS does not throttle background processes like Windows does.
+}
+
 void setup_prerequisites()
 {
     std::wcout.sync_with_stdio(false);

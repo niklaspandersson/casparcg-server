@@ -524,7 +524,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
     std::future<std::shared_ptr<texture>>
     copy_async(const array<const uint8_t>& source, int width, int height, int stride, common::bit_depth depth)
     {
-        return dispatch_async([=, self = shared_from_this()] {
+        return dispatch_async([=, this, self = shared_from_this()] {
             std::shared_ptr<buffer> buf;
 
             auto tmp = source.storage<std::shared_ptr<buffer>>();
@@ -543,7 +543,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
     std::future<array<const uint8_t>> copy_async(const std::shared_ptr<texture>& source)
     {
-        return spawn_async([=, self = shared_from_this()](yield_context /* yield */) {
+        return spawn_async([=, this, self = shared_from_this()](yield_context /* yield */) {
             // NOTE: Removed vkDeviceWaitIdle() which was blocking ALL GPU work every frame.
             // The copy_to() function already synchronizes via vkQueueWaitIdle() after the
             // transfer command, which is sufficient for GPU->CPU readback.
@@ -654,7 +654,7 @@ struct device::impl : public std::enable_shared_from_this<impl>
 
     std::future<void> gc()
     {
-        return spawn_async([=, self = shared_from_this()](yield_context yield) {
+        return spawn_async([=, this, self = shared_from_this()](yield_context yield) {
             CASPAR_LOG(info) << L" vk: Running GC.";
 
             try {
