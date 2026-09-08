@@ -21,7 +21,11 @@
 
 #include "oal.h"
 
+#ifdef __APPLE__
+#include "consumer/coreaudio_consumer.h"
+#else
 #include "consumer/oal_consumer.h"
+#endif
 
 #include <core/consumer/frame_consumer.h>
 
@@ -29,9 +33,15 @@ namespace caspar { namespace oal {
 
 void init(const core::module_dependencies& dependencies)
 {
+#ifdef __APPLE__
+    dependencies.consumer_registry->register_consumer_factory(L"System Audio Consumer", create_consumer_ca);
+    dependencies.consumer_registry->register_preconfigured_consumer_factory(L"system-audio",
+                                                                            create_preconfigured_consumer_ca);
+#else
     dependencies.consumer_registry->register_consumer_factory(L"System Audio Consumer", create_consumer);
     dependencies.consumer_registry->register_preconfigured_consumer_factory(L"system-audio",
                                                                             create_preconfigured_consumer);
+#endif
 }
 
 }} // namespace caspar::oal

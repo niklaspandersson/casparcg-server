@@ -59,7 +59,15 @@
 #include <clocale>
 #include <csignal>
 
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+// Defined in macos_main_loop.mm - processes NSRunLoop events for GCD main queue
+extern "C" void macos_process_events(double timeout_seconds);
+#endif
+
 namespace caspar {
+
+std::atomic<bool> sig_exit;
 
 void setup_global_locale()
 {
@@ -162,7 +170,21 @@ auto run(const std::wstring& config_file_name, std::atomic<bool>& should_wait_fo
     boost::asio::signal_set signals(io, SIGINT, SIGTERM);
     signals.async_wait([&](auto, auto) { io.stop(); });
 
+#ifdef __APPLE__
+    // On macOS, run ASIO on a background thread so the main thread can process
+    // Cocoa/GCD events required by GLFW screen consumer windows.
+    auto work_guard = boost::asio::make_work_guard(io);
+    std::thread asio_thread([&io] { io.run(); });
+
+    while (!io.stopped()) {
+        macos_process_events(0.01);  // 10ms timeout
+    }
+
+    work_guard.reset();
+    asio_thread.join();
+#else
     io.run();
+#endif
 
     caspar_server.reset();
 
@@ -191,6 +213,10 @@ void terminate_handler()
 int main(int argc, char** argv)
 {
     using namespace caspar;
+
+    // Before the interceptors, as the CEF subprocesses return from there without reaching the rest
+    // of main and need the same scheduling guarantees as the browser process.
+    setup_process_scheduling();
 
     if (intercept_command_line_args(argc, argv))
         return 0;

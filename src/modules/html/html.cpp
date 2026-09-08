@@ -40,6 +40,12 @@
 #include <memory>
 #include <utility>
 
+#ifdef __APPLE__
+#include <pthread.h>
+#include <sched.h>
+#include <boost/dll/runtime_symbol_info.hpp>
+#endif
+
 #include <include/cef_app.h>
 #include <include/cef_version.h>
 
@@ -174,7 +180,10 @@ class renderer_application
             command_line->AppendSwitch("enable-webgl");
 
             auto default_backend = L""; // Let CEF choose what is best
-#if __unix__
+#if __APPLE__
+            // macOS: prefer Metal backend via ANGLE for best performance
+            default_backend = L"metal";
+#elif __unix__
             // If there is no X server, Chromium requires us to force it to the angle backend
             if (getenv("DISPLAY") == nullptr)
                 default_backend = L"vulkan";
@@ -187,7 +196,8 @@ class renderer_application
             }
         }
 
-#if __unix__
+#if defined(__unix__) && !defined(__APPLE__)
+        // Linux: If there is no X server, use headless ozone platform
         if (getenv("DISPLAY") == nullptr) {
             command_line->AppendSwitchWithValue("ozone-platform", "headless");
         }
@@ -195,10 +205,22 @@ class renderer_application
 
         command_line->AppendSwitch("disable-web-security");
         command_line->AppendSwitch("enable-begin-frame-scheduling");
+        command_line->AppendSwitch("disable-renderer-backgrounding");
+        command_line->AppendSwitch("disable-backgrounding-occluded-windows");
+        command_line->AppendSwitch("disable-background-timer-throttling");
         command_line->AppendSwitch("enable-media-stream");
         command_line->AppendSwitch("use-fake-ui-for-media-stream");
         command_line->AppendSwitchWithValue("autoplay-policy", "no-user-gesture-required");
         command_line->AppendSwitchWithValue("remote-allow-origins", "*");
+
+#ifdef __APPLE__
+        // macOS: Use mock keychain to prevent "Chromium Safe Storage" keychain permission dialog
+        command_line->AppendSwitch("use-mock-keychain");
+
+        // macOS: Run GPU thread in main process to avoid subprocess launch failures
+        // CEF's GPU subprocess can fail to launch on macOS due to signing/sandbox issues
+        command_line->AppendSwitch("in-process-gpu");
+#endif
 
         if (process_type.empty() && !enable_gpu_) {
             // This gives more performance, but disabled gpu effects. Without it a single 1080p producer cannot be run
@@ -233,6 +255,12 @@ void init(const core::module_dependencies& dependencies)
     bool result    = g_cef_executor->invoke([&] {
 #ifdef WIN32
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+#elif defined(__APPLE__)
+        // macOS: Set thread to high priority using pthread
+        pthread_t thread = pthread_self();
+        struct sched_param param;
+        param.sched_priority = sched_get_priority_max(SCHED_FIFO);
+        pthread_setschedparam(thread, SCHED_FIFO, &param);
 #endif
         const auto gpu = is_gpu_shared_texture_enabled();
 
@@ -250,6 +278,70 @@ void init(const core::module_dependencies& dependencies)
             CASPAR_LOG(info) << L"[html] Using CEF cache path: " << cache_path;
             CefString(&settings.cache_path).FromWString(cache_path);
         }
+
+#ifdef __APPLE__
+        // macOS: Configure paths for both app bundle and flat deployment
+        // Get executable path and derive framework/resource locations
+        auto exe_path = boost::dll::program_location();
+        auto exe_dir  = exe_path.parent_path();
+
+        // Detect if running from an app bundle (path contains .app/Contents/MacOS)
+        auto exe_path_str  = exe_path.string();
+        bool is_app_bundle = exe_path_str.find(".app/Contents/MacOS") != std::string::npos;
+
+        boost::filesystem::path bundle_path;
+        boost::filesystem::path data_dir;
+
+        if (is_app_bundle) {
+            // App bundle: CasparCG.app/Contents/MacOS/casparcg
+            auto contents_path = exe_dir.parent_path(); // Contents
+            bundle_path        = contents_path.parent_path(); // CasparCG.app
+            data_dir           = contents_path / "Resources" / "data";
+            CASPAR_LOG(info) << "[html] Running from app bundle: " << bundle_path.string();
+        } else {
+            // Flat structure: build/shell/casparcg
+            bundle_path = exe_dir;
+            data_dir    = exe_dir / "data";
+            CASPAR_LOG(info) << "[html] Running from flat structure: " << exe_dir.string();
+        }
+
+        // Unless explicitly configured, keep the CEF cache inside the data folder (writable in an app bundle).
+        // root_cache_path defaults to cache_path, which also keeps CEF away from shared keychain storage.
+        if (env::properties().get(L"configuration.html.cache-path", L"").empty()) {
+            auto cef_cache_path = data_dir / "cef_cache";
+            CASPAR_LOG(info) << "[html] Using CEF cache path: " << cef_cache_path.string();
+            CefString(&settings.cache_path).FromString(cef_cache_path.string());
+        }
+
+        // Framework path is always ../Frameworks relative to executable
+        auto frameworks_path = exe_dir.parent_path() / "Frameworks";
+
+        // Framework: Contents/Frameworks/Chromium Embedded Framework.framework
+        auto framework_path = frameworks_path / "Chromium Embedded Framework.framework";
+        CefString(&settings.framework_dir_path).FromString(framework_path.string());
+
+        // Resources are inside the framework bundle on macOS
+        auto resources_path = framework_path / "Resources";
+        CefString(&settings.resources_dir_path).FromString(resources_path.string());
+        CefString(&settings.locales_dir_path).FromString(resources_path.string());
+
+        // Set the subprocess path to the main executable (handles renderer, GPU processes)
+        CefString(&settings.browser_subprocess_path).FromString(exe_path.string());
+
+        // Set main_bundle_path appropriately for app bundle or flat structure
+        if (is_app_bundle) {
+            CefString(&settings.main_bundle_path).FromString(bundle_path.string());
+        } else {
+            CefString(&settings.main_bundle_path).FromString(exe_dir.string());
+        }
+
+        CASPAR_LOG(info) << "[html] macOS CEF paths configured:";
+        CASPAR_LOG(info) << "[html]   App bundle: " << (is_app_bundle ? "yes" : "no");
+        CASPAR_LOG(info) << "[html]   Framework: " << framework_path.string();
+        CASPAR_LOG(info) << "[html]   Resources: " << resources_path.string();
+        CASPAR_LOG(info) << "[html]   Subprocess: " << exe_path.string();
+        CASPAR_LOG(info) << "[html]   Bundle path: " << bundle_path.string();
+#endif
 
         return CefInitialize(
             main_args, settings, CefRefPtr<CefApp>(new renderer_application(gpu.first, gpu.second)), nullptr);

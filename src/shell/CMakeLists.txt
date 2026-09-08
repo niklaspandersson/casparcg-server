@@ -23,6 +23,11 @@ if (MSVC)
 			shell.rc
 			windows_specific.cpp
 	)
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+	list(APPEND SOURCES
+			macos_specific.cpp
+			macos_main_loop.mm
+	)
 else ()
 	list(APPEND SOURCES
 			linux_specific.cpp
@@ -34,7 +39,10 @@ add_executable(casparcg ${SOURCES} ${HEADERS})
 set_target_properties(casparcg PROPERTIES
         OUTPUT_NAME "${CASPARCG_BINARY_NAME}"
     )
-target_compile_features(casparcg PRIVATE cxx_std_20)
+set_target_properties(casparcg PROPERTIES
+		CXX_STANDARD 20
+		CXX_STANDARD_REQUIRED ON
+		CXX_EXTENSIONS OFF)
 target_include_directories(casparcg PRIVATE
     ..
     ${BOOST_INCLUDE_PATH}
@@ -53,8 +61,15 @@ target_link_libraries(casparcg
 
 		TBB::tbb
 		TBB::tbbmalloc
-		GLEW::glew
 )
+
+IF(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+	target_link_libraries(casparcg GLEW::glew)
+ENDIF()
+
+if(ENABLE_VULKAN)
+	target_link_libraries(casparcg Vulkan::Vulkan)
+ENDIF()
 
 if (MSVC)
 	target_link_libraries(casparcg
@@ -79,6 +94,43 @@ if (MSVC)
 		d3d11.lib
 		dxgi.lib
 	)
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+	target_link_libraries(casparcg
+		${Boost_LIBRARIES}
+		${FFMPEG_LIBRARIES}
+		Apple::Frameworks
+		z
+		pthread
+	)
+	set_target_properties(casparcg PROPERTIES
+		INSTALL_RPATH "@executable_path/../Frameworks"
+		BUILD_WITH_INSTALL_RPATH TRUE
+	)
+	if (ENABLE_HTML AND DEFINED CEF_FRAMEWORK_PATH)
+		set(CEF_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/../Frameworks")
+		add_custom_command(TARGET casparcg POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E make_directory "${CEF_OUTPUT_DIR}"
+			COMMAND ${CMAKE_COMMAND} -E copy_directory "${CEF_FRAMEWORK_PATH}" "${CEF_OUTPUT_DIR}/Chromium Embedded Framework.framework"
+			COMMENT "Copying CEF framework to Frameworks directory"
+		)
+		# CEF uses dlopen to load GL libraries from the executable directory.
+		# Create symlinks from the executable dir to the framework's Libraries.
+		add_custom_command(TARGET casparcg POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E create_symlink
+				"${CEF_OUTPUT_DIR}/Chromium Embedded Framework.framework/Libraries/libEGL.dylib"
+				"${CMAKE_CURRENT_BINARY_DIR}/libEGL.dylib"
+			COMMAND ${CMAKE_COMMAND} -E create_symlink
+				"${CEF_OUTPUT_DIR}/Chromium Embedded Framework.framework/Libraries/libGLESv2.dylib"
+				"${CMAKE_CURRENT_BINARY_DIR}/libGLESv2.dylib"
+			COMMAND ${CMAKE_COMMAND} -E create_symlink
+				"${CEF_OUTPUT_DIR}/Chromium Embedded Framework.framework/Libraries/libvk_swiftshader.dylib"
+				"${CMAKE_CURRENT_BINARY_DIR}/libvk_swiftshader.dylib"
+			COMMAND ${CMAKE_COMMAND} -E create_symlink
+				"${CEF_OUTPUT_DIR}/Chromium Embedded Framework.framework/Libraries/vk_swiftshader_icd.json"
+				"${CMAKE_CURRENT_BINARY_DIR}/vk_swiftshader_icd.json"
+			COMMENT "Creating symlinks for CEF libraries in executable directory"
+		)
+	endif()
 else ()
 	target_link_libraries(casparcg
 		${Boost_LIBRARIES}

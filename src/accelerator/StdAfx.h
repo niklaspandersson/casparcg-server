@@ -1,4 +1,6 @@
+#ifndef __APPLE__
 #include <GL/glew.h>
+#endif
 #include <algorithm>
 #include <array>
 #include <boost/algorithm/cxx11/all_of.hpp>
@@ -16,7 +18,9 @@
 #include <common/env.h>
 #include <common/except.h>
 #include <common/future.h>
+#ifndef __APPLE__
 #include <common/gl/gl_check.h>
+#endif
 #include <common/memory.h>
 #include <common/scope_exit.h>
 #include <core/frame/frame.h>

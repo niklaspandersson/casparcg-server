@@ -1,7 +1,9 @@
 #include "accelerator.h"
 
+#ifndef __APPLE__
 #include "ogl/image/image_mixer.h"
 #include "ogl/util/device.h"
+#endif
 
 #ifdef ENABLE_VULKAN
 #include "vulkan/image/image_mixer.h"
@@ -53,11 +55,15 @@ struct accelerator::impl
                 depth);
         }
 #endif
+#ifndef __APPLE__
         return std::make_unique<ogl::image_mixer>(
             spl::make_shared_ptr(std::dynamic_pointer_cast<ogl::device>(get_device())),
             channel_id,
             format_repository_.get_max_video_format_size(),
             depth);
+#else
+        CASPAR_THROW_EXCEPTION(user_error() << msg_info(L"No accelerator backend available"));
+#endif
     }
 
     std::shared_ptr<accelerator_device> get_device()
@@ -75,10 +81,14 @@ struct accelerator::impl
         }
 #endif
 
+#ifndef __APPLE__
         if (!device_) {
             device_ = std::dynamic_pointer_cast<accelerator_device>(std::make_shared<ogl::device>());
         }
         return device_;
+#else
+        CASPAR_THROW_EXCEPTION(user_error() << msg_info(L"No accelerator backend available"));
+#endif
     }
 };
 

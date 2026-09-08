@@ -54,7 +54,9 @@
 // #include <boost/log/sources/severity_channel_logger.hpp>
 // #include <boost/log/trivial.hpp>
 // #include <boost/log/utility/setup/common_attributes.hpp>
+#ifndef __APPLE__
 #include <GL/glew.h>
+#endif
 #include <boost/make_shared.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/ptree_fwd.hpp>

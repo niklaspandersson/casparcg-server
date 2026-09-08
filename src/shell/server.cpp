@@ -266,16 +266,30 @@ struct server::impl
         caspar::accelerator::accelerator_backend backend = caspar::accelerator::accelerator_backend::invalid;
         auto accelerator = boost::to_lower_copy(pt.get(L"configuration.accelerator", L"auto"));
         if (accelerator == L"auto") {
+#ifdef __APPLE__
+            // macOS only supports Vulkan backend (via MoltenVK)
+            backend = caspar::accelerator::accelerator_backend::vulkan;
+#else
             backend = caspar::accelerator::accelerator_backend::opengl;
+#endif
         } else if (accelerator == L"opengl") {
+#ifdef __APPLE__
+            CASPAR_LOG(warning) << L"OpenGL backend not available on macOS, using Vulkan instead.";
+            backend = caspar::accelerator::accelerator_backend::vulkan;
+#else
             backend = caspar::accelerator::accelerator_backend::opengl;
+#endif
         } else if (accelerator == L"vulkan") {
             backend = caspar::accelerator::accelerator_backend::vulkan;
         } else {
             CASPAR_THROW_EXCEPTION(user_error() << msg_info(L"Invalid accelerator: " + accelerator));
         }
 #else
+#ifdef __APPLE__
+        CASPAR_THROW_EXCEPTION(user_error() << msg_info(L"Vulkan backend required on macOS but ENABLE_VULKAN is not set"));
+#else
         caspar::accelerator::accelerator_backend backend = caspar::accelerator::accelerator_backend::opengl;
+#endif
 #endif
 
         accelerator_.set_backend(backend);

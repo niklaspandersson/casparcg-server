@@ -21,7 +21,11 @@
 
 #include "screen.h"
 
+#ifdef __APPLE__
+#include "consumer/screen_consumer_vk.h"
+#else
 #include "consumer/screen_consumer.h"
+#endif
 
 #include <core/consumer/frame_consumer.h>
 
@@ -29,8 +33,13 @@ namespace caspar { namespace screen {
 
 void init(const core::module_dependencies& dependencies)
 {
+#ifdef __APPLE__
+    dependencies.consumer_registry->register_consumer_factory(L"Screen Consumer", create_consumer_vk);
+    dependencies.consumer_registry->register_preconfigured_consumer_factory(L"screen", create_preconfigured_consumer_vk);
+#else
     dependencies.consumer_registry->register_consumer_factory(L"Screen Consumer", create_consumer);
     dependencies.consumer_registry->register_preconfigured_consumer_factory(L"screen", create_preconfigured_consumer);
+#endif
 }
 
 }} // namespace caspar::screen

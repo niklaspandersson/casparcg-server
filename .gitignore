@@ -12,6 +12,7 @@ dist
 CMakeFiles
 casparcg_server
 *.spv
+log/
 
 src/cmake-build-*
 src/.idea
@@ -19,3 +20,12 @@ src/.idea
 # debian build artifacts
 /debian
 /obj-*
+
+# Ignore macOS system files
+.DS_Store
+
+# Environment file with secrets
+.env
+
+# Python cache
+__pycache__/

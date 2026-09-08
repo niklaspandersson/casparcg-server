@@ -2,41 +2,50 @@ cmake_minimum_required (VERSION 3.28)
 project (accelerator)
 
 set(SOURCES
-	ogl/image/image_kernel.cpp
-	ogl/image/image_mixer.cpp
-	ogl/image/image_shader.cpp
-
-	ogl/util/buffer.cpp
-	ogl/util/context.cpp
-	ogl/util/device.cpp
-	ogl/util/shader.cpp
-	ogl/util/texture.cpp
-	ogl/util/matrix.cpp
-	ogl/util/transforms.cpp
-
 	accelerator.cpp
 )
 
 set(HEADERS
-	ogl/image/image_kernel.h
-	ogl/image/image_mixer.h
-	ogl/image/image_shader.h
-
-	ogl/util/buffer.h
-	ogl/util/context.h
-	ogl/util/device.h
-	ogl/util/shader.h
-	ogl/util/texture.h
-	ogl/util/matrix.h
-	ogl/util/transforms.h
-
-	ogl_image_vertex.h
-	ogl_image_fragment.h
-
 	accelerator.h
 	StdAfx.h
 )
 
+# OpenGL backend (not available on macOS)
+IF(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+	list(APPEND SOURCES
+		ogl/image/image_kernel.cpp
+		ogl/image/image_mixer.cpp
+		ogl/image/image_shader.cpp
+
+		ogl/util/buffer.cpp
+		ogl/util/context.cpp
+		ogl/util/device.cpp
+		ogl/util/shader.cpp
+		ogl/util/texture.cpp
+		ogl/util/matrix.cpp
+		ogl/util/transforms.cpp
+	)
+
+	list(APPEND HEADERS
+		ogl/image/image_kernel.h
+		ogl/image/image_mixer.h
+		ogl/image/image_shader.h
+
+		ogl/util/buffer.h
+		ogl/util/context.h
+		ogl/util/device.h
+		ogl/util/shader.h
+		ogl/util/texture.h
+		ogl/util/matrix.h
+		ogl/util/transforms.h
+
+		ogl_image_vertex.h
+		ogl_image_fragment.h
+	)
+
+ENDIF()
+
+# Vulkan backend
 IF(ENABLE_VULKAN)
 	list(APPEND SOURCES
 		vulkan/image/image_kernel.cpp
@@ -82,6 +91,7 @@ if (MSVC)
 	)
 endif ()
 
+# Vulkan shader compilation
 IF (ENABLE_VULKAN)
 	find_program(glslc_executable NAMES glslc HINTS Vulkan::glslc)
 	set(SHADER_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/image)
@@ -112,13 +122,19 @@ IF (ENABLE_VULKAN)
 	bin2c("vulkan/image/fragment_shader.spv" "vulkan_image_fragment.h" "caspar::accelerator::vulkan" "fragment_shader")
 ENDIF()
 
-bin2c("ogl/image/shader.vert" "ogl_image_vertex.h" "caspar::accelerator::ogl" "vertex_shader")
-bin2c("ogl/image/shader.frag" "ogl_image_fragment.h" "caspar::accelerator::ogl" "fragment_shader")
+# OpenGL shader embedding (not on macOS)
+IF(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+	bin2c("ogl/image/shader.vert" "ogl_image_vertex.h" "caspar::accelerator::ogl" "vertex_shader")
+	bin2c("ogl/image/shader.frag" "ogl_image_fragment.h" "caspar::accelerator::ogl" "fragment_shader")
+ENDIF()
 
 casparcg_add_library(accelerator SOURCES ${SOURCES} ${HEADERS})
 target_include_directories(accelerator PRIVATE .. ${CMAKE_CURRENT_BINARY_DIR})
 target_precompile_headers(accelerator PRIVATE StdAfx.h)
-target_link_libraries(accelerator PRIVATE common core GLEW::glew sfml-window)
+target_link_libraries(accelerator PRIVATE common core)
+IF(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+	target_link_libraries(accelerator PRIVATE GLEW::glew sfml-window)
+ENDIF()
 
 IF(ENABLE_VULKAN)
 	target_link_libraries(accelerator PRIVATE vk-bootstrap::vk-bootstrap GPUOpen::VulkanMemoryAllocator Vulkan::Headers)
@@ -128,8 +144,11 @@ ENDIF()
 source_group(sources ./.*)
 source_group(sources\\cpu\\image cpu/image/.*)
 source_group(sources\\cpu\\util cpu/util/.*)
-source_group(sources\\ogl\\image ogl/image/.*)
-source_group(sources\\ogl\\util ogl/util/.*)
+
+IF(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+	source_group(sources\\ogl\\image ogl/image/.*)
+	source_group(sources\\ogl\\util ogl/util/.*)
+ENDIF()
 
 IF(ENABLE_VULKAN)
 	source_group(sources\\vulkan\\image vulkan/image/.*)

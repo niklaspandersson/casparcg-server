@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: transparent;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            overflow: hidden;
+            width: 1920px;
+            height: 1080px;
+        }
+
+        .lower-third {
+            position: absolute;
+            bottom: 80px;
+            left: 60px;
+            animation: slideIn 0.5s ease-out forwards;
+        }
+
+        .name-bar {
+            background: linear-gradient(135deg, #1a5fb4 0%, #3584e4 100%);
+            color: white;
+            padding: 15px 40px;
+            font-size: 42px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            border-radius: 4px 4px 0 0;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+
+        .title-bar {
+            background: rgba(255,255,255,0.95);
+            color: #333;
+            padding: 12px 40px;
+            font-size: 28px;
+            font-weight: 400;
+            border-radius: 0 0 4px 4px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        }
+
+        .logo {
+            position: absolute;
+            top: 40px;
+            right: 60px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 15px 25px;
+            font-size: 24px;
+            font-weight: bold;
+            border-radius: 4px;
+            animation: fadeIn 1s ease-out forwards;
+        }
+
+        .ticker {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(26, 95, 180, 0.9);
+            color: white;
+            padding: 12px 0;
+            font-size: 24px;
+            white-space: nowrap;
+            overflow: hidden;
+        }
+
+        .ticker-content {
+            display: inline-block;
+            animation: scroll 20s linear infinite;
+            padding-left: 100%;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(-100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes scroll {
+            from { transform: translateX(0); }
+            to { transform: translateX(-100%); }
+        }
+    </style>
+</head>
+<body>
+    <div class="logo">CasparCG</div>
+
+    <div class="lower-third">
+        <div class="name-bar">Jane Smith</div>
+        <div class="title-bar">Senior Graphics Designer</div>
+    </div>
+
+    <div class="ticker">
+        <span class="ticker-content">
+            Breaking News: CasparCG Vulkan backend now supports video with alpha channel overlays!
+            This is a test ticker running across the screen.
+        </span>
+    </div>
+</body>
+</html>
