@@ -13,18 +13,25 @@ casparcg_add_library(caspar_test_support SOURCES
 	support/main.cpp
 	support/output_dir.cpp
 	support/output_dir.h
+	support/process.cpp
+	support/process.h
 	support/producer_harness.cpp
 	support/producer_harness.h
 	support/runs.cpp
 	support/runs.h
 	support/test_media.cpp
 	support/test_media.h
+	support/watchdog.cpp
+	support/watchdog.h
 )
 target_include_directories(caspar_test_support PUBLIC ${CMAKE_SOURCE_DIR}/tests/support)
 target_include_directories(caspar_test_support PRIVATE ${CMAKE_SOURCE_DIR})
 target_include_directories(caspar_test_support SYSTEM PRIVATE ${BOOST_INCLUDE_PATH} ${FFMPEG_INCLUDE_PATH})
 target_link_libraries(caspar_test_support PUBLIC GTest::gmock PRIVATE common core)
 set_target_properties(caspar_test_support PROPERTIES FOLDER tests)
+if (CASPARCG_SANITIZE)
+	target_compile_definitions(caspar_test_support PRIVATE CASPAR_TEST_SANITIZER_DIR=${CMAKE_CURRENT_SOURCE_DIR}/sanitizers)
+endif ()
 
 caspar_add_test(support_tests
 	SOURCES
@@ -34,6 +41,7 @@ caspar_add_test(support_tests
 		support/output_dir_test.cpp
 		support/runs_test.cpp
 		support/test_media_test.cpp
+		support/watchdog_test.cpp
 	LIBRARIES core common
 	LABELS unit
 )

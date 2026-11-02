@@ -1,5 +1,7 @@
 #include "producer_harness.h"
+#include "output_dir.h"
 #include "test_media.h"
+#include "watchdog.h"
 
 #include <core/consumer/frame_consumer_registry.h>
 #include <core/frame/frame_transform.h>
@@ -13,7 +15,10 @@
 
 #include <core/frame/pixel_format.h>
 
+#include <tbb/parallel_for.h>
+
 #include <algorithm>
+#include <mutex>
 #include <thread>
 
 namespace caspar { namespace test {
@@ -43,6 +48,34 @@ struct image_collector : core::frame_visitor
     void pop() override { volumes.pop_back(); }
 };
 
+constexpr auto hang_timeout = std::chrono::seconds(30);
+
+template <typename Predicate>
+bool wait_until(Predicate&& done, std::chrono::milliseconds timeout)
+{
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!done()) {
+        if (std::chrono::steady_clock::now() > deadline)
+            return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return true;
+}
+
+// Threads that live as long as the process once something first needs them: TBB's workers, the
+// registry's producer-destroyer thread and the watchdog. Starting them before the thread baseline
+// keeps them out of the leak check.
+void warm_up_thread_pools(const core::frame_producer_dependencies& dependencies,
+                          const core::frame_producer_registry&     registry)
+{
+    static std::once_flag once;
+    std::call_once(once, [&] {
+        start_watchdog();
+        tbb::parallel_for(0, 2000, [](int) { std::this_thread::sleep_for(std::chrono::microseconds(500)); });
+        registry.create_producer(dependencies, std::vector<std::wstring>{L"#FF000000"}); // destroyed right away
+    });
+}
+
 } // namespace
 
 std::vector<std::optional<int>> indices(const std::vector<produced_frame>& frames)
@@ -71,25 +104,49 @@ producer_harness::producer_harness(const std::wstring& format, std::vector<modul
     if (format_.format == core::video_format::invalid)
         throw std::invalid_argument("producer_harness: unknown format");
 
+    warm_up_thread_pools(core::frame_producer_dependencies(
+                             frame_factory_, {}, format_repository_, format_, producer_registry_, cg_registry_),
+                         *producer_registry_);
+
     core::module_dependencies dependencies(cg_registry_, producer_registry_, consumer_registry_, nullptr);
     for (auto init : modules)
         init(dependencies);
+
+    baseline_ = process_snapshot::take();
 }
 
 producer_harness::~producer_harness()
 {
+    using namespace std::chrono_literals;
+
     // Every producer holds the frame factory until its teardown is complete, so the harness holding
     // the only reference means they are all gone.
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (frame_factory_.use_count() > 1 && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    if (!wait_until([&] { return frame_factory_.use_count() == 1; }, 10s)) {
+        ADD_FAILURE() << "A producer was not destroyed within 10 s of the test releasing it"
+                      << dump_thread_stacks(output_dir() / "stacks.txt");
+        mark_process_unclean();
+        return;
+    }
 
-    if (frame_factory_.use_count() > 1)
-        ADD_FAILURE() << "A producer was not destroyed within 10 s of the test releasing it";
+    // The log capture opens the test's log file during the test; it isn't the producer's.
+    const auto log_file = (output_path() / "log.txt").string();
+    auto       leftover = [&] {
+        auto result = added(baseline_, process_snapshot::take());
+        std::erase_if(result.files, [&](auto& file) { return file.second == log_file; });
+        return result;
+    };
+    if (!wait_until([&] { return leftover().threads.empty() && leftover().files.empty(); }, 5s)) {
+        ADD_FAILURE() << "Left behind 5 s after the producers were destroyed:" << describe(leftover())
+                      << dump_thread_stacks(output_dir() / "stacks.txt");
+        mark_process_unclean();
+    }
+
+    EXPECT_EQ(frame_factory_->frames_alive(), 0) << "frames still referenced after the producers were destroyed";
 }
 
 spl::shared_ptr<core::frame_producer> producer_harness::create(const std::vector<std::wstring>& params)
 {
+    watchdog_guard                    guard("producer_harness::create", hang_timeout);
     core::frame_producer_dependencies dependencies(
         frame_factory_, {}, format_repository_, format_, producer_registry_, cg_registry_);
     return producer_registry_->create_producer(dependencies, params);
@@ -119,12 +176,17 @@ producer_harness::receive(core::frame_producer& producer, int count, std::chrono
                                                    : core::video_field::progressive;
         auto nb_samples = format_.audio_cadence[tick % format_.audio_cadence.size()];
 
-        auto frame = producer.receive(field, nb_samples);
+        core::draw_frame frame;
+        {
+            watchdog_guard guard("producer.receive()", hang_timeout);
+            frame = producer.receive(field, nb_samples);
+        }
         if (!frame) {
             ++underflows_;
             if (std::chrono::steady_clock::now() > deadline) {
                 ADD_FAILURE() << "No frame from " << u8(producer.print()) << " within " << timeout.count()
-                              << " ms after " << result.size() << " of " << count << " frames";
+                              << " ms after " << result.size() << " of " << count << " frames"
+                              << dump_thread_stacks(output_dir() / "stacks.txt");
                 break;
             }
             if (pacing_ == pacing::fast)
@@ -155,9 +217,14 @@ std::wstring producer_harness::call(core::frame_producer&            producer,
                                     const std::vector<std::wstring>& params,
                                     std::chrono::milliseconds        timeout)
 {
-    auto reply = producer.call(params);
+    std::future<std::wstring> reply;
+    {
+        watchdog_guard guard("producer.call()", hang_timeout);
+        reply = producer.call(params);
+    }
     if (reply.wait_for(timeout) != std::future_status::ready) {
-        ADD_FAILURE() << "call() did not reply within " << timeout.count() << " ms";
+        ADD_FAILURE() << "call() did not reply within " << timeout.count() << " ms"
+                      << dump_thread_stacks(output_dir() / "stacks.txt");
         return {};
     }
     return reply.get();

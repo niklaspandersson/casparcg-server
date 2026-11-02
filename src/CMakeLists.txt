@@ -15,6 +15,7 @@ set(CASPARCG_DOWNLOAD_CACHE ${CMAKE_CURRENT_BINARY_DIR}/external CACHE STRING "D
 
 option(ENABLE_HTML "Enable HTML module, require CEF" ON)
 option(BUILD_TESTING "Build the tests (run them with ctest)" OFF)
+set(CASPARCG_SANITIZE "" CACHE STRING "Build with sanitizers: address (ASan and UBSan) or thread (TSan)")
 
 set(DIAG_FONT_PATH "LiberationMono-Regular.ttf" CACHE STRING
     "Path to font that will be used to load diag font at runtime. By default
@@ -64,6 +65,19 @@ IF(ENABLE_VULKAN)
 ENDIF()
 
 include_directories("${CMAKE_BINARY_DIR}/generated")
+
+if (CASPARCG_SANITIZE STREQUAL "address")
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+elseif (CASPARCG_SANITIZE STREQUAL "thread")
+    add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=thread)
+elseif (NOT CASPARCG_SANITIZE STREQUAL "")
+    message(FATAL_ERROR "CASPARCG_SANITIZE must be address, thread or empty")
+endif ()
+if (CASPARCG_SANITIZE AND ENABLE_HTML)
+    message(WARNING "CEF does not run under sanitizers; configure with -DENABLE_HTML=OFF")
+endif ()
 
 if (BUILD_TESTING)
     enable_testing()

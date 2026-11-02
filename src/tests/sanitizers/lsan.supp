@@ -1,0 +1,7 @@
+# LeakSanitizer suppressions for the test suite. Every entry says why it is here; remove it when
+# the cause is fixed.
+
+# modules/ffmpeg/producer/av_producer.cpp logs avfilter_graph_dump()'s string without av_free()ing
+# it: about 1.4 KB per filter graph, two graphs per PLAY, SEEK and loop restart. Real leak, not
+# yet fixed.
+leak:avfilter_graph_dump

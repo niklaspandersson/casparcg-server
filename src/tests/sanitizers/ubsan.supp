@@ -1,0 +1,6 @@
+# UndefinedBehaviorSanitizer suppressions for the test suite. Every entry says why it is here;
+# remove it when the cause is fixed.
+
+# common/base64.cpp: to_base64() with an empty input memcpy()s from a null vector.data(). Harmless
+# with a length of 0, but undefined.
+nonnull-attribute:base64.cpp

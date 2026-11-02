@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fake_frame_factory.h"
+#include "process.h"
 
 #include <common/memory.h>
 
@@ -45,9 +46,12 @@ class producer_harness
     // `format` is the channel's video format, e.g. L"1080i5000".
     explicit producer_harness(const std::wstring& format = L"720p5000", std::vector<module_init> modules = {});
 
-    // Waits for every producer created here to be destroyed, including teardown that producers do
-    // on threads of their own, and fails the test if one is still alive after 10 seconds. Release
-    // the producers first: declare them after the harness.
+    // Checks that the producers left nothing behind, and fails the test if they did:
+    // - every producer created here is destroyed within 10 s, including teardown a producer does on
+    //   threads of its own;
+    // - then, within 5 s, the process has no threads or open files it didn't have when the harness
+    //   was constructed (Linux), and no frames from the harness's frame factory are referenced.
+    // Release the producers and frames first: declare them after the harness.
     ~producer_harness();
 
     producer_harness(const producer_harness&)            = delete;
@@ -55,6 +59,9 @@ class producer_harness
 
     // Creates a producer from AMCP-style parameters, e.g. {path, L"LOOP", L"SEEK", L"10"}.
     // Throws like PLAY does when nothing matches.
+    //
+    // Every call into a producer (create, receive, call) is guarded by a watchdog: one that hangs
+    // for 30 s ends the test process with every thread's stack in the output folder.
     spl::shared_ptr<core::frame_producer> create(const std::vector<std::wstring>& params);
 
     // Ticks the channel until `count` frames have come out, alternating fields in interlaced
@@ -92,6 +99,7 @@ class producer_harness
     spl::shared_ptr<core::cg_producer_registry>    cg_registry_;
     spl::shared_ptr<core::frame_producer_registry> producer_registry_;
     spl::shared_ptr<core::frame_consumer_registry> consumer_registry_;
+    process_snapshot                               baseline_;
     pacing                                         pacing_ = pacing::realtime;
     std::chrono::steady_clock::time_point          next_tick_;
     int                                            tick_       = 0;
