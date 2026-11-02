@@ -65,9 +65,42 @@ Boost.Log. If the process exits first, that logging crashes in the already destr
   teardown.
 - Pinned by: nothing yet; the end-to-end shutdown tests will cover `KILL` after `CLEAR`.
 
+## ffmpeg consumer
+
+### 7. Dropped frames aren't reported
+
+`ffmpeg_consumer::send()` queues frames for its encoder thread with `try_push` on a queue of 64.
+When the encoder can't keep up, frames are dropped and only the diagnostics graph is tagged
+("dropped-frame"); nothing is logged.
+
+- Effect: a FILE recording with gaps (video and audio) and no trace of it in the log. In a test,
+  300 frames of 1080p50 sent faster than ProRes encodes them gave a file with 69.
+- Found by: an overload experiment with `consumer_harness` (fast pacing).
+- Pinned by: `ffmpeg_consumer_known_issues.reports_frames_it_drops`, skipped.
+- Open question: whether a FILE (non-realtime) consumer should drop at all.
+
+### 8. Warning about an option the consumer set itself
+
+When the container's default video codec is H.264, the consumer adds `preset:v=veryfast`, even when
+`-codec:v` chooses another encoder, and then warns "Unused option preset=veryfast:v".
+
+- Effect: a misleading warning for every recording to MOV/MP4 with a non-H.264 codec.
+- Found by: the consumer tests' logs.
+- Pinned by: `ffmpeg_consumer_known_issues.no_warning_about_its_own_default_options`, skipped.
+
+### 9. Question: interlaced channels are recorded as double-rate progressive
+
+In an interlaced channel each field is its own `send()`, and the consumer writes each as a frame:
+a 1080i5000 channel becomes a 1080 file at 50 frames per second with an unknown field order, not
+25 interlaced frames per second. `send()` has a `TODO - field alignment` here. This may be
+intended; it needs a decision.
+
+- Found by: `ffmpeg_consumer.interlaced_channel_writes_every_field` (which only checks that every
+  field is written).
+
 ## common
 
-### 6. `to_base64()` with empty input passes a null pointer to `memcpy`
+### 10. `to_base64()` with empty input passes a null pointer to `memcpy`
 
 Harmless with a length of 0, but undefined behaviour.
 

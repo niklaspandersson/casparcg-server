@@ -96,6 +96,14 @@ which provides `main()` and:
   declare producers, frames and anything that must outlive teardown (an `http_server`) in the right
   order: things constructed before the harness are part of its baseline and outlive it.
   `producer_teardown_test.cpp` shows the pattern.
+- **`consumer_harness`**: feeds one consumer the way a channel's output does. Construct it with
+  the channel format, the module's init and optionally the channel's bit depth, `create()` a
+  consumer from AMCP-style parameters (`{L"FILE", path, L"-codec:v", L"ffv1"}`), `send(*consumer, n)`
+  stamped BGRA frames with the audio ramp (one per field in interlaced formats), then
+  `close(consumer)` to wait until it has flushed and is destroyed, and check its output with
+  `decode_clip()`. `send()` returns false when the consumer failed or asked to be removed;
+  `error()` says why. The same teardown checks apply as for producers. See
+  `src/modules/ffmpeg/tests/consumer_test.cpp`.
 - **Races** (`concurrency.h`): AMCP calls arrive on another thread than the channel's `receive()`.
   `background_loop calls([&] { harness.call(*producer, {L"SEEK", L"0"}); }, 30ms, 150ms);` repeats an
   action on its own thread while the test receives frames; use `harness.set_pacing(fast)` to overlap
