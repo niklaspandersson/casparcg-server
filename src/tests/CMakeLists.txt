@@ -3,6 +3,8 @@
 
 casparcg_add_library(caspar_test_support SOURCES
 	support/fake_frame_factory.cpp
+	support/environment.cpp
+	support/environment.h
 	support/fake_frame_factory.h
 	support/http_server.cpp
 	support/http_server.h
@@ -11,6 +13,10 @@ casparcg_add_library(caspar_test_support SOURCES
 	support/main.cpp
 	support/output_dir.cpp
 	support/output_dir.h
+	support/producer_harness.cpp
+	support/producer_harness.h
+	support/runs.cpp
+	support/runs.h
 	support/test_media.cpp
 	support/test_media.h
 )
@@ -26,6 +32,7 @@ caspar_add_test(support_tests
 		support/http_server_test.cpp
 		support/log_capture_test.cpp
 		support/output_dir_test.cpp
+		support/runs_test.cpp
 		support/test_media_test.cpp
 	LIBRARIES core common
 	LABELS unit

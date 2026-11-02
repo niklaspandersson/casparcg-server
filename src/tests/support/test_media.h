@@ -24,15 +24,16 @@ constexpr int max_stamped_index = 0xFFFF;
 
 struct clip_options
 {
-    std::wstring format         = L"720p5000"; // size, frame rate and scan from a channel format name
-    int          frames         = 50;
-    std::string  codec          = "ffv1"; // any FFmpeg encoder name, e.g. "mpeg4", "libx264", "prores_ks"
-    std::string  pixel_format   = "yuv420p";
-    std::string  extension      = "mkv"; // picks the container
-    bool         audio          = true;
-    int          audio_channels = 2;
-    std::string  audio_codec    = "pcm_s32le";
-    std::string  name           = "clip";
+    std::wstring format       = L"720p5000"; // size, frame rate and scan from a channel format name
+    int          frames       = 50;
+    std::string  codec        = "ffv1"; // any FFmpeg encoder name, e.g. "mpeg4", "libx264", "prores_ks"
+    std::string  pixel_format = "yuv420p";
+    std::string  extension    = "mov"; // picks the container. MKV rounds timestamps to whole ms,
+                                       // so audio isn't sample-accurate after a seek
+    bool        audio          = true;
+    int         audio_channels = 2;
+    std::string audio_codec    = "pcm_s32le";
+    std::string name           = "clip";
 };
 
 // Encodes a clip into output_dir() and returns its path.

@@ -32,10 +32,18 @@ FUNCTION (caspar_add_test TARGET)
 	target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 	target_include_directories(${TARGET} SYSTEM PRIVATE ${BOOST_INCLUDE_PATH})
 	target_link_libraries(${TARGET} PRIVATE caspar_test_support ${ARG_LIBRARIES} casparcg_system_libraries TBB::tbb)
+	if (NOT MSVC)
+		# Static FFmpeg needs X11, which CMake lists before it; --as-needed would drop X11 because
+		# nothing in a test executable has used it by then. The server's own objects happen to.
+		target_link_options(${TARGET} PRIVATE LINKER:--no-as-needed)
+	endif ()
 
 	# PRE_TEST lists the tests when ctest runs, not at build time, so a crashing or sanitizer
-	# build still links.
+	# build still links. Discovery can't pass a list of labels through, so they are joined into one
+	# label, e.g. "module:ffmpeg"; ctest -L and -LE match regular expressions, so `ctest -L ffmpeg`
+	# and `ctest -LE accelerator` still select by any part.
+	list(JOIN ARG_LABELS ":" label)
 	gtest_discover_tests(${TARGET}
 		DISCOVERY_MODE PRE_TEST
-		PROPERTIES LABELS "${ARG_LABELS}")
+		PROPERTIES LABELS "${label}")
 ENDFUNCTION ()
