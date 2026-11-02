@@ -14,6 +14,7 @@ set(CASPARCG_DOWNLOAD_MIRROR https://github.com/CasparCG/dependencies/releases/d
 set(CASPARCG_DOWNLOAD_CACHE ${CMAKE_CURRENT_BINARY_DIR}/external CACHE STRING "Download cache directory for cmake ExternalProjects")
 
 option(ENABLE_HTML "Enable HTML module, require CEF" ON)
+option(BUILD_TESTING "Build the tests (run them with ctest)" OFF)
 
 set(DIAG_FONT_PATH "LiberationMono-Regular.ttf" CACHE STRING
     "Path to font that will be used to load diag font at runtime. By default
@@ -64,6 +65,11 @@ ENDIF()
 
 include_directories("${CMAKE_BINARY_DIR}/generated")
 
+if (BUILD_TESTING)
+    enable_testing()
+    include(CasparCG_Testing)
+endif ()
+
 add_subdirectory(tools)
 add_subdirectory(accelerator)
 add_subdirectory(common)
@@ -71,3 +77,7 @@ add_subdirectory(core)
 add_subdirectory(modules)
 add_subdirectory(protocol)
 add_subdirectory(shell)
+
+if (BUILD_TESTING)
+    add_subdirectory(tests)
+endif ()

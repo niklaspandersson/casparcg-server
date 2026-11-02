@@ -36,6 +36,29 @@ See `BUILDING.md` for dependencies, Windows and the remaining build options.
 
 The test harness is being built up step by step; this section grows with it.
 
+Tests use GoogleTest and run through CTest. They are off by default; configure with
+`-DBUILD_TESTING=ON` (GoogleTest is fetched unless an installed one is found):
+
+```sh
+cmake -S src -B build -DBUILD_TESTING=ON -DENABLE_HTML=OFF
+cmake --build build --parallel
+ctest --test-dir build -L unit --output-on-failure     # one tier
+ctest --test-dir build -R tokenize --output-on-failure # tests whose name matches
+build/tests/protocol_tests --gtest_filter='tokenize.*' # one executable, directly
+```
+
+Where tests go:
+
+| Code under test | Test location | CMake |
+|---|---|---|
+| `src/common`, `src/core`, `src/protocol` | `src/tests/<area>/<name>_test.cpp` | add the file to the area's executable in `src/tests/CMakeLists.txt` |
+
+Each test executable is declared with `caspar_add_test()` (`src/CMakeModules/CasparCG_Testing.cmake`),
+which registers every GoogleTest case with CTest under the given labels. Test names are
+`<suite>.<behaviour_in_snake_case>`, e.g. `tokenize.keeps_quoted_strings_together`.
+
+Labels: `unit` (pure logic, needs nothing).
+
 Rules:
 
 - **Commit the tests you write.** A test written to check a fix or a feature belongs in the repo,
