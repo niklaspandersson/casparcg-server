@@ -176,12 +176,13 @@ TEST(ffmpeg_producer_formats, half_rate_clip_shows_each_frame_twice)
     EXPECT_EQ(runs(samples(frames)), "0..19199");
 }
 
-TEST_F(ffmpeg_producer, plays_over_http)
+TEST(ffmpeg_producer_network, plays_over_http)
 {
     auto        clip = make_clip({.frames = 50});
-    http_server server(clip.parent_path());
+    http_server server(clip.parent_path()); // outlives the harness, and so the producer's teardown
 
-    auto producer = harness.create({u16(server.url(clip.filename().string()))});
+    producer_harness harness(L"720p5000", {ffmpeg::init});
+    auto             producer = harness.create({u16(server.url(clip.filename().string()))});
     EXPECT_EQ(runs(indices(harness.receive(*producer, 50))), "0..49");
 }
 

@@ -89,8 +89,22 @@ which provides `main()` and:
   `call(*producer, {L"SEEK", L"30"})`. Ticks are paced in real time by default. Each received frame
   has its stamped `index`, its field and its audible `samples`; check sequences with
   `runs(indices(frames))`, e.g. `"0..49 49*10"` (frames 0 to 49, then 49 held ten more ticks), and
-  `runs(samples(frames))`. The harness waits for every producer's teardown when it is destroyed, so
-  declare producers after it. See `src/modules/ffmpeg/tests/producer_test.cpp` for examples.
+  `runs(samples(frames))`. See `src/modules/ffmpeg/tests/producer_test.cpp` for examples.
+
+  When the harness is destroyed it checks the teardown and fails the test if a producer outlives it
+  by 10 s, or if threads, open files (Linux) or frames from its frame factory are left behind. So
+  declare producers, frames and anything that must outlive teardown (an `http_server`) in the right
+  order: things constructed before the harness are part of its baseline and outlive it.
+  `producer_teardown_test.cpp` shows the pattern.
+- **Watchdog**: every call the harness makes into a producer is guarded. One that hangs for 30 s
+  ends the test process with every thread's stack in `<output dir>/stacks.txt` (needs `gdb`).
+  Missed deadlines and leaked threads also write `stacks.txt`. Read it to see where things are stuck.
+
+Sanitizer builds (Linux): configure a separate build folder with
+`-DCASPARCG_SANITIZE=address` (ASan, LeakSanitizer and UBSan) or `-DCASPARCG_SANITIZE=thread` (TSan),
+plus `-DENABLE_HTML=OFF`. Run the same `ctest` commands there. Findings fail the test. Known,
+unfixed findings are suppressed in `src/tests/sanitizers/*.supp`, each with a comment saying why;
+remove the entry when its cause is fixed, and never add one without a comment.
 
 Things that look like bugs but aren't:
 
