@@ -114,6 +114,15 @@ which provides `main()` and:
   ends the test process with every thread's stack in `<output dir>/stacks.txt` (needs `gdb`).
   Missed deadlines and leaked threads also write `stacks.txt`. Read it to see where things are stuck.
 
+Compositor tests (`src/accelerator/tests/`, label `compositor:accelerator`) run the image mixer on
+a real backend; they need a GPU (both start without a display) and skip a backend that isn't
+available. `compositor_harness(backend::vulkan)` builds frames on that backend (`bgra_frame(image)`,
+`ycbcr_frame(image, {...})`), and `render(layers)` mixes them, bottom first, into an `image`
+(`image.h` in the support library: `compare()`, `difference_image()`, `write_png()`). To compare
+OpenGL with Vulkan on a new case, add a scene to `scenes()` in `compositor_test.cpp`; each parity test
+writes both renders and their difference as PNGs to its output folder. Extend the harness when a
+scene needs something it doesn't have.
+
 End-to-end tests (`src/tests/e2e/`, pytest) run the installed server (`cmake --install <build>`
 first) on a free port with a config of their own. They are registered with CTest, one test per file,
 when the Python CMake finds has pytest (`python3 -m venv build/venv && build/venv/bin/pip install

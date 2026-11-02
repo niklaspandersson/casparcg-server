@@ -12,6 +12,8 @@ casparcg_add_library(caspar_test_support SOURCES
 	support/fake_frame_factory.h
 	support/http_server.cpp
 	support/http_server.h
+	support/image.cpp
+	support/image.h
 	support/leak_check.cpp
 	support/leak_check.h
 	support/log_capture.cpp
