@@ -71,6 +71,11 @@ which provides `main()` and:
   kept afterwards. Put files the test writes there, never in the source tree.
 - **`fake_frame_factory`**: a `core::frame_factory` backed by host memory, for running producers
   without an accelerator. `frames_alive()` counts frames still referenced.
+- **Test media** (`test_media.h`): `make_clip({.format = L"1080i5000", .frames = 10, .codec = ...})`
+  encodes a clip into the output folder. Every frame carries its index as a barcode and the audio is
+  a ramp of sample numbers, so check exact output with `read_index(frame)`, `ramp_samples(frame,
+  channels)` and `decode_clip(path)` instead of comparing pixels. The barcode format is described in
+  the header. Generate media in the test; don't commit media files.
 
 When a test fails, read the failure message first, then `log.txt` in its output folder (its path is
 printed under the failure).
