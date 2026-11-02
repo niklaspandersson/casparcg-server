@@ -1,7 +1,7 @@
 #pragma once
 
 #include "fake_frame_factory.h"
-#include "process.h"
+#include "leak_check.h"
 
 #include <common/memory.h>
 
@@ -38,6 +38,12 @@ std::vector<std::int64_t>       samples(const std::vector<produced_frame>& frame
 // The harness sets up the registries a module's init() registers into, and creates producers
 // through frame_producer_registry with the same parameters as AMCP's PLAY, so parameter parsing and
 // the registry's wrapping are part of the test. Frames come from a fake_frame_factory.
+//
+// Use it for any module's producer: which frames and audio come out on which tick, its commands
+// (call()), its parameters, and that it tears down cleanly. It doesn't model the layer and stage
+// (transitions, LOADBG/autoplay, a second producer), the mixer (frames are host memory and never
+// composited) or AMCP's replies: test those end to end (src/tests/e2e), and mixing with
+// compositor_harness.
 class producer_harness
 {
   public:
@@ -51,7 +57,8 @@ class producer_harness
     //   threads of its own;
     // - then, within 5 s, the process has no threads or open files it didn't have when the harness
     //   was constructed (Linux), and no frames from the harness's frame factory are referenced.
-    // Release the producers and frames first: declare them after the harness.
+    // Release the producers and frames first: declare them after the harness. A producer the test
+    // still holds fails at once with a message saying so, rather than as a teardown that timed out.
     ~producer_harness();
 
     producer_harness(const producer_harness&)            = delete;
@@ -93,17 +100,18 @@ class producer_harness
     fake_frame_factory&            frame_factory() { return *frame_factory_; }
 
   private:
-    core::video_format_repository                  format_repository_;
-    core::video_format_desc                        format_;
-    spl::shared_ptr<fake_frame_factory>            frame_factory_;
-    spl::shared_ptr<core::cg_producer_registry>    cg_registry_;
-    spl::shared_ptr<core::frame_producer_registry> producer_registry_;
-    spl::shared_ptr<core::frame_consumer_registry> consumer_registry_;
-    process_snapshot                               baseline_;
-    pacing                                         pacing_ = pacing::realtime;
-    std::chrono::steady_clock::time_point          next_tick_;
-    int                                            tick_       = 0;
-    int                                            underflows_ = 0;
+    core::video_format_repository                    format_repository_;
+    core::video_format_desc                          format_;
+    spl::shared_ptr<fake_frame_factory>              frame_factory_;
+    spl::shared_ptr<core::cg_producer_registry>      cg_registry_;
+    spl::shared_ptr<core::frame_producer_registry>   producer_registry_;
+    spl::shared_ptr<core::frame_consumer_registry>   consumer_registry_;
+    std::vector<std::weak_ptr<core::frame_producer>> producers_;
+    std::optional<leak_check>                        leak_check_;
+    pacing                                           pacing_ = pacing::realtime;
+    std::chrono::steady_clock::time_point            next_tick_;
+    int                                              tick_       = 0;
+    int                                              underflows_ = 0;
 };
 
 }} // namespace caspar::test

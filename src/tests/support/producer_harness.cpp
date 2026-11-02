@@ -1,4 +1,5 @@
 #include "producer_harness.h"
+#include "leak_check.h"
 #include "output_dir.h"
 #include "test_media.h"
 #include "watchdog.h"
@@ -14,8 +15,6 @@
 #include <common/utf.h>
 
 #include <core/frame/pixel_format.h>
-
-#include <tbb/parallel_for.h>
 
 #include <algorithm>
 #include <mutex>
@@ -50,28 +49,13 @@ struct image_collector : core::frame_visitor
 
 constexpr auto hang_timeout = std::chrono::seconds(30);
 
-template <typename Predicate>
-bool wait_until(Predicate&& done, std::chrono::milliseconds timeout)
-{
-    auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (!done()) {
-        if (std::chrono::steady_clock::now() > deadline)
-            return false;
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    return true;
-}
-
-// Threads that live as long as the process once something first needs them: TBB's workers, the
-// registry's producer-destroyer thread and the watchdog. Starting them before the thread baseline
-// keeps them out of the leak check.
-void warm_up_thread_pools(const core::frame_producer_dependencies& dependencies,
-                          const core::frame_producer_registry&     registry)
+// The registry destroys producers on a thread it starts on first use and keeps; start it before the
+// harness takes its baseline.
+void warm_up_producer_destroyer(const core::frame_producer_dependencies& dependencies,
+                                const core::frame_producer_registry&     registry)
 {
     static std::once_flag once;
     std::call_once(once, [&] {
-        start_watchdog();
-        tbb::parallel_for(0, 2000, [](int) { std::this_thread::sleep_for(std::chrono::microseconds(500)); });
         registry.create_producer(dependencies, std::vector<std::wstring>{L"#FF000000"}); // destroyed right away
     });
 }
@@ -104,20 +88,30 @@ producer_harness::producer_harness(const std::wstring& format, std::vector<modul
     if (format_.format == core::video_format::invalid)
         throw std::invalid_argument("producer_harness: unknown format");
 
-    warm_up_thread_pools(core::frame_producer_dependencies(
-                             frame_factory_, {}, format_repository_, format_, producer_registry_, cg_registry_),
-                         *producer_registry_);
+    warm_up_process();
+    warm_up_producer_destroyer(core::frame_producer_dependencies(
+                                   frame_factory_, {}, format_repository_, format_, producer_registry_, cg_registry_),
+                               *producer_registry_);
 
     core::module_dependencies dependencies(cg_registry_, producer_registry_, consumer_registry_, nullptr);
     for (auto init : modules)
         init(dependencies);
 
-    baseline_ = process_snapshot::take();
+    leak_check_.emplace();
 }
 
 producer_harness::~producer_harness()
 {
     using namespace std::chrono_literals;
+
+    // Still referenced by the test, so it can't be destroyed yet: a declaration order mistake, not a hang.
+    for (auto& producer : producers_) {
+        if (!producer.expired()) {
+            ADD_FAILURE() << "A producer is still referenced when the harness is destroyed; declare it after the "
+                             "harness";
+            return;
+        }
+    }
 
     // Every producer holds the frame factory until its teardown is complete, so the harness holding
     // the only reference means they are all gone.
@@ -128,20 +122,10 @@ producer_harness::~producer_harness()
         return;
     }
 
-    // The log capture opens the test's log file during the test; it isn't the producer's.
-    const auto log_file = (output_path() / "log.txt").string();
-    auto       leftover = [&] {
-        auto result = added(baseline_, process_snapshot::take());
-        std::erase_if(result.files, [&](auto& file) { return file.second == log_file; });
-        return result;
-    };
-    if (!wait_until([&] { return leftover().threads.empty() && leftover().files.empty(); }, 5s)) {
-        ADD_FAILURE() << "Left behind 5 s after the producers were destroyed:" << describe(leftover())
-                      << dump_thread_stacks(output_dir() / "stacks.txt");
-        mark_process_unclean();
-    }
+    leak_check_->expect_none_left("the producers were destroyed");
 
-    EXPECT_EQ(frame_factory_->frames_alive(), 0) << "frames still referenced after the producers were destroyed";
+    EXPECT_EQ(frame_factory_->frames_alive(), 0)
+        << "frames still referenced after the producers were destroyed; declare received frames after the harness";
 }
 
 spl::shared_ptr<core::frame_producer> producer_harness::create(const std::vector<std::wstring>& params)
@@ -149,7 +133,9 @@ spl::shared_ptr<core::frame_producer> producer_harness::create(const std::vector
     watchdog_guard                    guard("producer_harness::create", hang_timeout);
     core::frame_producer_dependencies dependencies(
         frame_factory_, {}, format_repository_, format_, producer_registry_, cg_registry_);
-    return producer_registry_->create_producer(dependencies, params);
+    auto producer = producer_registry_->create_producer(dependencies, params);
+    producers_.push_back(producer);
+    return producer;
 }
 
 std::vector<produced_frame>

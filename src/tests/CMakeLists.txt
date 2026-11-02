@@ -4,12 +4,16 @@
 casparcg_add_library(caspar_test_support SOURCES
 	support/concurrency.cpp
 	support/concurrency.h
+	support/consumer_harness.cpp
+	support/consumer_harness.h
 	support/fake_frame_factory.cpp
 	support/environment.cpp
 	support/environment.h
 	support/fake_frame_factory.h
 	support/http_server.cpp
 	support/http_server.h
+	support/leak_check.cpp
+	support/leak_check.h
 	support/log_capture.cpp
 	support/log_capture.h
 	support/main.cpp
@@ -41,6 +45,7 @@ caspar_add_test(support_tests
 		support/http_server_test.cpp
 		support/log_capture_test.cpp
 		support/output_dir_test.cpp
+		support/producer_harness_test.cpp
 		support/runs_test.cpp
 		support/test_media_test.cpp
 		support/watchdog_test.cpp
