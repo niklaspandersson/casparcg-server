@@ -59,8 +59,12 @@ target_link_libraries(casparcg
 		GLEW::glew
 )
 
+# Platform and third-party libraries the modules need at link time. Test executables link them too.
+add_library(casparcg_system_libraries INTERFACE)
+target_link_libraries(casparcg casparcg_system_libraries)
+
 if (MSVC)
-	target_link_libraries(casparcg
+	target_link_libraries(casparcg_system_libraries INTERFACE
 		Winmm.lib
 		Ws2_32.lib
 		OpenGL32.lib
@@ -83,7 +87,7 @@ if (MSVC)
 		dxgi.lib
 	)
 else ()
-	target_link_libraries(casparcg
+	target_link_libraries(casparcg_system_libraries INTERFACE
 		${Boost_LIBRARIES}
 		OpenGL::GL
 		OpenGL::OpenGL

@@ -59,6 +59,22 @@ which registers every GoogleTest case with CTest under the given labels. Test na
 
 Labels: `unit` (pure logic, needs nothing).
 
+Every test executable links `caspar_test_support` (`src/tests/support/`, namespace `caspar::test`),
+which provides `main()` and:
+
+- **Log capture.** Each test's log goes to `<output dir>/log.txt`, and any `error` or `fatal` record
+  fails the test, including records from background threads. A test that expects an error says so
+  first with `allow_log_errors(L"part of the message")`. `log_records()` returns what was logged.
+  `CASPAR_TEST_LOG_LEVEL` sets the level (default `debug`).
+- **`output_dir()`**: a folder per test, `test-output/<suite>/<test>/` under the working directory
+  (CTest runs from `build/tests`) or under `$CASPAR_TEST_OUTPUT`. Emptied when the test starts and
+  kept afterwards. Put files the test writes there, never in the source tree.
+- **`fake_frame_factory`**: a `core::frame_factory` backed by host memory, for running producers
+  without an accelerator. `frames_alive()` counts frames still referenced.
+
+When a test fails, read the failure message first, then `log.txt` in its output folder (its path is
+printed under the failure).
+
 Rules:
 
 - **Commit the tests you write.** A test written to check a fix or a feature belongs in the repo,

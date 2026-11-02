@@ -19,3 +19,5 @@ src/.idea
 # debian build artifacts
 /debian
 /obj-*
+# test output (caspar::test::output_dir)
+test-output

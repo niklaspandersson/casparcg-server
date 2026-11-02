@@ -31,7 +31,7 @@ FUNCTION (caspar_add_test TARGET)
 			FOLDER tests)
 	target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 	target_include_directories(${TARGET} SYSTEM PRIVATE ${BOOST_INCLUDE_PATH})
-	target_link_libraries(${TARGET} PRIVATE ${ARG_LIBRARIES} GTest::gmock GTest::gtest_main TBB::tbb)
+	target_link_libraries(${TARGET} PRIVATE caspar_test_support ${ARG_LIBRARIES} casparcg_system_libraries TBB::tbb)
 
 	# PRE_TEST lists the tests when ctest runs, not at build time, so a crashing or sanitizer
 	# build still links.
