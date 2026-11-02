@@ -114,6 +114,33 @@ which provides `main()` and:
   ends the test process with every thread's stack in `<output dir>/stacks.txt` (needs `gdb`).
   Missed deadlines and leaked threads also write `stacks.txt`. Read it to see where things are stuck.
 
+End-to-end tests (`src/tests/e2e/`, pytest) run the installed server (`cmake --install <build>`
+first) on a free port with a config of their own. They are registered with CTest, one test per file,
+when the Python CMake finds has pytest (`python3 -m venv build/venv && build/venv/bin/pip install
+pytest`, then configure with `-DPython3_EXECUTABLE=$PWD/build/venv/bin/python`):
+
+```sh
+ctest --test-dir build -L e2e --output-on-failure
+# one test, directly (ctest sets these variables itself):
+cd build/tests && CASPAR_BINARY=$PWD/../staging/bin/casparcg CASPAR_MAKE_CLIP=$PWD/caspar_make_clip \
+  ../venv/bin/python -m pytest ../../src/tests/e2e/test_lifecycle.py -k kill
+```
+
+- Fixtures (`e2e/conftest.py`): `server` (one 720p5000 channel), `make_server(channels=(...),
+  accelerator=..., extra_config=..., start=...)`, `make_clip(path, frames=, format=)` (stamped clips,
+  via the `caspar_make_clip` tool) and `output_dir`. `Server` (`e2e/caspar.py`) has `command("PLAY
+  1-10 clip")`, `amcp()` connections, `console()`, `signal()`, `wait_exit()` and the log.
+- Every server is checked when the test ends: stopped with `KILL` if still running, then it must
+  exit with code 0 (or the test's `server.expected_exit`), with no error lines in its log and no
+  sanitizer report. Allow an expected error with `server.allow_errors("text")`.
+- A test's server folder (config, `server.log`, `stacks.txt` on a hang, `backtrace.dump` on a crash)
+  is kept under `test-output/e2e/<file>/<test>/`. A crash's stack is decoded into the failure
+  message; `e2e/decode_backtrace.py <binary> <backtrace.dump>` does it by hand.
+- Channels need an accelerator (`-L e2e` includes them; their label is `e2e:accelerator`).
+  `CASPAR_TEST_ACCELERATOR=vulkan|opengl` picks one; tests with `make_server(channels=())` need none.
+- Errors and crashes the server shows in many tests because of known bugs are listed in
+  `KNOWN_ERRORS` and `KNOWN_CRASHES` in `e2e/conftest.py`, each pinned by a skipped test.
+
 Sanitizer builds (Linux): configure a separate build folder with
 `-DCASPARCG_SANITIZE=address` (ASan, LeakSanitizer and UBSan) or `-DCASPARCG_SANITIZE=thread` (TSan),
 plus `-DENABLE_HTML=OFF`. Run the same `ctest` commands there. Findings fail the test. Known,

@@ -60,10 +60,13 @@ prematurely", an exception from `Input::internal_reset`, and a filter graph buil
 `ffmpeg_producer`'s destructor hands the real producer to a detached thread, which logs through
 Boost.Log. If the process exits first, that logging crashes in the already destroyed logger.
 
-- Effect: a crash at exit, e.g. on `KILL` right after a `CLEAR` (also seen in the loop-reset kit).
+- Effect: the server aborts (SIGABRT) at exit after "Successfully shutdown CasparCG Server." when a
+  clip was playing or had just been cleared: about 1 in 3 `KILL`s in the end-to-end tests. The log
+  shows the producer's "Joined" after the shutdown message.
 - Found by: `ffmpeg_producer.reports_its_length` crashing at exit, before the harness waited for
-  teardown.
-- Pinned by: nothing yet; the end-to-end shutdown tests will cover `KILL` after `CLEAR`.
+  teardown; then `e2e/test_lifecycle.py`.
+- Pinned by: `test_shuts_down_while_playing` and `test_kill_right_after_clear` in
+  `e2e/test_lifecycle.py`, skipped.
 
 ## ffmpeg consumer
 
@@ -97,6 +100,68 @@ intended; it needs a decision.
 
 - Found by: `ffmpeg_consumer.interlaced_channel_writes_every_field` (which only checks that every
   field is written).
+
+## AMCP server and shutdown
+
+### 11. Shutdown can log "local_endpoint: Bad file descriptor"
+
+`AsyncEventServer::implementation::stop()` closes the acceptor from the thread shutting the server
+down, while the AMCP io thread may still use it (asio acceptors aren't thread-safe), and `print()`
+calls `acceptor_.local_endpoint()`, which throws once the acceptor is closed. The exception is logged
+as an error with a stack trace.
+
+The same race can crash the server: in one run of ten the io thread segfaulted in
+`handle_accept()` → `start_accept()` → `async_accept()` (in `epoll_reactor::start_op`) while the
+acceptor was being closed, and the process ended with SIGABRT before "Successfully shutdown".
+
+- Effect: an error in the log on many ordinary shutdowns (seen with the OpenGL accelerator), and an
+  occasional crash on shutdown.
+- Found by: `e2e/test_lifecycle.py`; the crash stack from the server's `backtrace.dump`.
+- Pinned by: `test_lifecycle.py::test_kill_logs_no_errors`, skipped; the e2e fixture allows the
+  message and the crash in other tests (`KNOWN_ERRORS` and `KNOWN_CRASHES` in `e2e/conftest.py`).
+
+### 12. A server that fails to start exits with code 0
+
+With the AMCP port already taken, the server logs `[fatal] Failed to setup AMCP controller ... It is
+likely already in use` and exits with code 0. `main()` only sets the exit code on the normal path.
+
+- Effect: service managers and scripts see a successful run.
+- Found by: `e2e/test_lifecycle.py::test_port_in_use_is_reported`.
+- Pinned by: `test_lifecycle.py::test_failed_startup_exits_with_an_error`, skipped.
+
+### 13. A client disconnecting logs an exception
+
+`connection::ipv4_address()` (`protocol/util/AsyncEventServer.cpp`) calls
+`socket_->remote_endpoint()` whenever the socket is open; once the peer has gone it throws
+"Transport endpoint is not connected", e.g. while logging "Client ... disconnected". The exception is
+logged as an error with a stack trace.
+
+- Effect: an error with a stack trace in the log whenever a client disconnects at the wrong moment
+  (e.g. right after sending a command).
+- Found by: `e2e/test_amcp_tcp.py`.
+- Pinned by: `test_amcp_tcp.py::test_early_disconnect_logs_no_errors`, skipped; the e2e fixture
+  allows the message in other tests.
+
+### 14. The server can abort after a complete shutdown
+
+After logging "Successfully shutdown CasparCG Server.", the process sometimes ends with SIGABRT,
+even with no channels and no clips (so this is not #5). No `backtrace.dump` is written, so the abort
+bypasses or comes after the server's crash handler. Under gdb, a run that hit it forked a process
+after the shutdown message and hung.
+
+- Effect: about 1 in 8 `KILL`s in the end-to-end tests exit with SIGABRT instead of 0.
+- Found by: `e2e/test_amcp_tcp.py` and `e2e/test_lifecycle.py` failing at teardown.
+- Pinned by: `test_lifecycle.py::test_repeated_kill_never_aborts`, skipped; the e2e fixture accepts
+  SIGABRT after a logged successful shutdown (`allow_abort_after_shutdown` in `e2e/caspar.py`).
+- Needs investigation; a core dump would show it.
+
+### 15. Unconfirmed: RESTART once hung, and once closed the connection without a reply
+
+In one e2e run `RESTART` was answered by the connection closing instead of `202 RESTART OK`; in
+another the server didn't exit within 15 s of `RESTART`. Neither came back in 20 further runs of
+`test_restart_exits_with_code_5`; the stacks of the hang were overwritten before they were read.
+
+- Next time: keep the run's output (`CASPAR_TEST_OUTPUT=<new folder>`) and read `stacks.txt`.
 
 ## common
 
