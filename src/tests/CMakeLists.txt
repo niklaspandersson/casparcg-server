@@ -4,6 +4,8 @@
 casparcg_add_library(caspar_test_support SOURCES
 	support/fake_frame_factory.cpp
 	support/fake_frame_factory.h
+	support/http_server.cpp
+	support/http_server.h
 	support/log_capture.cpp
 	support/log_capture.h
 	support/main.cpp
@@ -21,6 +23,7 @@ set_target_properties(caspar_test_support PROPERTIES FOLDER tests)
 caspar_add_test(support_tests
 	SOURCES
 		support/fake_frame_factory_test.cpp
+		support/http_server_test.cpp
 		support/log_capture_test.cpp
 		support/output_dir_test.cpp
 		support/test_media_test.cpp

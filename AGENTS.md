@@ -76,6 +76,9 @@ which provides `main()` and:
   a ramp of sample numbers, so check exact output with `read_index(frame)`, `ramp_samples(frame,
   channels)` and `decode_clip(path)` instead of comparing pixels. The barcode format is described in
   the header. Generate media in the test; don't commit media files.
+- **`http_server`**: serves a folder on 127.0.0.1 for network sources (`server.url("clip.mkv")`).
+  It can throttle (`set_rate`), delay or hang responses, `stop()` mid-download and `start()` again on
+  the same port, and logs every request with its Range header and bytes sent.
 
 When a test fails, read the failure message first, then `log.txt` in its output folder (its path is
 printed under the failure).
