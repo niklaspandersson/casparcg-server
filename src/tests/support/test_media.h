@@ -39,6 +39,10 @@ struct clip_options
 // Encodes a clip into output_dir() and returns its path.
 std::filesystem::path make_clip(const clip_options& options = {});
 
+// The same, to a path of the caller's choosing (`name` is ignored; the extension picks the
+// container). The caspar_make_clip tool uses it for end-to-end tests.
+void write_clip(const std::filesystem::path& path, const clip_options& options);
+
 // Writes the barcode for `index` into an 8-bit luma plane.
 void stamp_index(std::uint8_t* luma, int width, int height, int linesize, int index);
 

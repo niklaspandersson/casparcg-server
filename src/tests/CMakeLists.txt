@@ -67,3 +67,43 @@ caspar_add_test(protocol_tests
 	LIBRARIES protocol
 	LABELS unit
 )
+
+# caspar_make_clip: stamped test clips for tests outside C++ (the end-to-end tests).
+add_executable(caspar_make_clip tools/make_clip.cpp)
+set_target_properties(caspar_make_clip PROPERTIES
+		CXX_STANDARD 20
+		CXX_STANDARD_REQUIRED ON
+		CXX_EXTENSIONS OFF
+		FOLDER tests)
+target_include_directories(caspar_make_clip PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_include_directories(caspar_make_clip SYSTEM PRIVATE ${BOOST_INCLUDE_PATH})
+target_link_libraries(caspar_make_clip PRIVATE caspar_test_support core common casparcg_system_libraries TBB::tbb)
+if (NOT MSVC)
+	target_link_options(caspar_make_clip PRIVATE LINKER:--no-as-needed)
+endif ()
+
+# End-to-end tests: pytest files in e2e/, run against the installed server (cmake --install). One
+# CTest test per file; run single tests with pytest directly (see AGENTS.md).
+find_package(Python3 COMPONENTS Interpreter)
+if (Python3_FOUND)
+	execute_process(COMMAND ${Python3_EXECUTABLE} -c "import pytest" RESULT_VARIABLE no_pytest OUTPUT_QUIET ERROR_QUIET)
+endif ()
+if (Python3_FOUND AND NOT no_pytest)
+	# file name -> label; tests that start channels need an accelerator (a GPU, or Mesa's drivers)
+	set(e2e_tests "lifecycle=e2e:accelerator" "amcp_tcp=e2e")
+	foreach (entry ${e2e_tests})
+		string(REPLACE "=" ";" entry "${entry}")
+		list(GET entry 0 name)
+		list(GET entry 1 label)
+		add_test(NAME e2e.${name}
+			COMMAND ${Python3_EXECUTABLE} -m pytest -p no:cacheprovider -v ${CMAKE_CURRENT_SOURCE_DIR}/e2e/test_${name}.py
+			WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+		set_tests_properties(e2e.${name} PROPERTIES
+			LABELS "${label}"
+			TIMEOUT 900
+			ENVIRONMENT "CASPAR_BINARY=${CMAKE_INSTALL_PREFIX}/bin/${CASPARCG_BINARY_NAME};CASPAR_MAKE_CLIP=$<TARGET_FILE:caspar_make_clip>")
+	endforeach ()
+else ()
+	message(STATUS "pytest not found for ${Python3_EXECUTABLE}: end-to-end tests are not registered. "
+		"Install pytest, or point -DPython3_EXECUTABLE at a Python that has it.")
+endif ()

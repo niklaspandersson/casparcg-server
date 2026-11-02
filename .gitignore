@@ -21,3 +21,4 @@ src/.idea
 /obj-*
 # test output (caspar::test::output_dir)
 test-output
+__pycache__

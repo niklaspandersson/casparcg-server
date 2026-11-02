@@ -256,11 +256,16 @@ std::vector<std::int64_t> ramp_samples(const core::const_frame& frame, int chann
 
 std::filesystem::path make_clip(const clip_options& options)
 {
+    auto path = output_dir() / (options.name + "." + options.extension);
+    write_clip(path, options);
+    return path;
+}
+
+void write_clip(const std::filesystem::path& path, const clip_options& options)
+{
     auto format_desc = core::video_format_repository().find(options.format);
     if (format_desc.format == core::video_format::invalid)
         fail("make_clip: unknown format " + u8(options.format));
-
-    auto path = output_dir() / (options.name + "." + options.extension);
 
     AVFormatContext* raw_format = nullptr;
     check(avformat_alloc_output_context2(&raw_format, nullptr, nullptr, path.string().c_str()),
@@ -401,7 +406,6 @@ std::filesystem::path make_clip(const clip_options& options)
         write_packets(format.get(), *audio, nullptr);
     check(av_write_trailer(format.get()), "av_write_trailer");
 
-    return path;
 }
 
 decoded_clip decode_clip(const std::filesystem::path& path)
