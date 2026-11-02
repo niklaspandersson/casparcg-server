@@ -131,7 +131,8 @@ Rules:
 - **Never delete a test, disable it or loosen a tolerance to make it pass** without saying so, and
   why, in the commit message.
 - A test that exposes a bug you aren't fixing in the same change is committed skipped, with the
-  reason in the skip message. The fix re-enables it.
+  reason in the skip message, and the bug is added to `src/tests/known-bugs.md`. The fix re-enables
+  the test and removes the entry.
 
 ## Commits
 
