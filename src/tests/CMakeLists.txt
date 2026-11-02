@@ -2,6 +2,8 @@
 # Module tests live next to their module.
 
 casparcg_add_library(caspar_test_support SOURCES
+	support/concurrency.cpp
+	support/concurrency.h
 	support/fake_frame_factory.cpp
 	support/environment.cpp
 	support/environment.h

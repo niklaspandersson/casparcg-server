@@ -96,6 +96,12 @@ which provides `main()` and:
   declare producers, frames and anything that must outlive teardown (an `http_server`) in the right
   order: things constructed before the harness are part of its baseline and outlive it.
   `producer_teardown_test.cpp` shows the pattern.
+- **Races** (`concurrency.h`): AMCP calls arrive on another thread than the channel's `receive()`.
+  `background_loop calls([&] { harness.call(*producer, {L"SEEK", L"0"}); }, 30ms, 150ms);` repeats an
+  action on its own thread while the test receives frames; use `harness.set_pacing(fast)` to overlap
+  more. Wrap a stress test's body in `for (int n = 0; n < stress_iterations(3); ++n)`, and hunt for
+  rare races with `CASPAR_TEST_STRESS=50`, ideally in a sanitizer build. See
+  `producer_race_test.cpp`.
 - **Watchdog**: every call the harness makes into a producer is guarded. One that hangs for 30 s
   ends the test process with every thread's stack in `<output dir>/stacks.txt` (needs `gdb`).
   Missed deadlines and leaked threads also write `stacks.txt`. Read it to see where things are stuck.
