@@ -2,14 +2,14 @@
 
 CasparCG Server: a C++20 playout server. Sources are under `src/`, which is also the CMake root.
 
-| Directory | What's in it |
-|---|---|
-| `src/common` | Shared utilities: logging, executors, environment/config |
-| `src/core` | Channels, stage/layer, mixer, frame and producer/consumer interfaces |
-| `src/accelerator` | Image mixer backends: `ogl` (OpenGL) and `vulkan` |
-| `src/modules/*` | Producers and consumers: ffmpeg, decklink, html, image, ... |
-| `src/protocol` | AMCP and the TCP server |
-| `src/shell` | `main()`, server setup, the default `casparcg.config` |
+| Directory         | What's in it                                                         |
+| ----------------- | -------------------------------------------------------------------- |
+| `src/common`      | Shared utilities: logging, executors, environment/config             |
+| `src/core`        | Channels, stage/layer, mixer, frame and producer/consumer interfaces |
+| `src/accelerator` | Image mixer backends: `ogl` (OpenGL) and `vulkan`                    |
+| `src/modules/*`   | Producers and consumers: ffmpeg, decklink, html, image, ...          |
+| `src/protocol`    | AMCP and the TCP server                                              |
+| `src/shell`       | `main()`, server setup, the default `casparcg.config`                |
 
 ## Building (Linux)
 
@@ -28,9 +28,7 @@ See `BUILDING.md` for dependencies, Windows and the remaining build options.
 
 - Format C++ with the repo's `.clang-format`.
 - Write code that reads like the code around it: naming, comment density, idioms.
-- Keep comments short. Explain what isn't obvious; longer reasoning goes in the commit message.
-- When a second implementation of something is needed, prefer a strategy class to branching inside
-  the existing one (see the decklink consumer's `format_strategy`).
+- Keep comments short. Explain what isn't obvious.
 
 ## Tests
 
@@ -50,10 +48,10 @@ build/tests/protocol_tests --gtest_filter='tokenize.*' # one executable, directl
 
 Where tests go:
 
-| Code under test | Test location | CMake |
-|---|---|---|
-| `src/common`, `src/core`, `src/protocol` | `src/tests/<area>/<name>_test.cpp` | add the file to the area's executable in `src/tests/CMakeLists.txt` |
-| A module's producer or consumer | `src/modules/<module>/tests/<name>_test.cpp` | `<module>_tests` in that folder's `CMakeLists.txt`, labels `module <module>` |
+| Code under test                          | Test location                                | CMake                                                                        |
+| ---------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------- |
+| `src/common`, `src/core`, `src/protocol` | `src/tests/<area>/<name>_test.cpp`           | add the file to the area's executable in `src/tests/CMakeLists.txt`          |
+| A module's producer or consumer          | `src/modules/<module>/tests/<name>_test.cpp` | `<module>_tests` in that folder's `CMakeLists.txt`, labels `module <module>` |
 
 Each test executable is declared with `caspar_add_test()` (`src/CMakeModules/CasparCG_Testing.cmake`),
 which registers every GoogleTest case with CTest under the given labels. Test names are
@@ -78,38 +76,28 @@ which provides `main()` and:
 - **Test media** (`test_media.h`): `make_clip({.format = L"1080i5000", .frames = 10, .codec = ...})`
   encodes a clip into the output folder. Every frame carries its index as a barcode and the audio is
   a ramp of sample numbers, so check exact output with `read_index(frame)`, `ramp_samples(frame,
-  channels)` and `decode_clip(path)` instead of comparing pixels. The barcode format is described in
+channels)` and `decode_clip(path)` instead of comparing pixels. The barcode format is described in
   the header. Generate media in the test; don't commit media files.
 - **`http_server`**: serves a folder on 127.0.0.1 for network sources (`server.url("clip.mkv")`).
   It can throttle (`set_rate`), delay or hang responses, `stop()` mid-download and `start()` again on
   the same port, and logs every request with its Range header and bytes sent.
-- **`producer_harness`**: runs one producer the way a channel does. Construct it with the channel
-  format and the module's init (`producer_harness h(L"1080i5000", {ffmpeg::init})`), `create()` a
-  producer from AMCP-style parameters (`{path, L"LOOP"}`), `receive(*producer, n)` frames and
-  `call(*producer, {L"SEEK", L"30"})`. Ticks are paced in real time by default. Each received frame
-  has its stamped `index`, its field and its audible `samples`; check sequences with
-  `runs(indices(frames))`, e.g. `"0..49 49*10"` (frames 0 to 49, then 49 held ten more ticks), and
-  `runs(samples(frames))`. See `src/modules/ffmpeg/tests/producer_test.cpp` for examples.
-
-  When the harness is destroyed it checks the teardown and fails the test if a producer outlives it
-  by 10 s, or if threads, open files (Linux) or frames from its frame factory are left behind. So
-  declare producers, frames and anything that must outlive teardown (an `http_server`) in the right
-  order: things constructed before the harness are part of its baseline and outlive it.
-  `producer_teardown_test.cpp` shows the pattern.
-- **`consumer_harness`**: feeds one consumer the way a channel's output does. Construct it with
-  the channel format, the module's init and optionally the channel's bit depth, `create()` a
-  consumer from AMCP-style parameters (`{L"FILE", path, L"-codec:v", L"ffv1"}`), `send(*consumer, n)`
-  stamped BGRA frames with the audio ramp (one per field in interlaced formats), then
-  `close(consumer)` to wait until it has flushed and is destroyed, and check its output with
-  `decode_clip()`. `send()` returns false when the consumer failed or asked to be removed;
-  `error()` says why. The same teardown checks apply as for producers. See
-  `src/modules/ffmpeg/tests/consumer_test.cpp`.
-- **Races** (`concurrency.h`): AMCP calls arrive on another thread than the channel's `receive()`.
-  `background_loop calls([&] { harness.call(*producer, {L"SEEK", L"0"}); }, 30ms, 150ms);` repeats an
-  action on its own thread while the test receives frames; use `harness.set_pacing(fast)` to overlap
-  more. Wrap a stress test's body in `for (int n = 0; n < stress_iterations(3); ++n)`, and hunt for
-  rare races with `CASPAR_TEST_STRESS=50`, ideally in a sanitizer build. See
-  `producer_race_test.cpp`.
+- **Module contract harnesses**, for any module's producer or consumer, without a server or GPU.
+  They create it from AMCP-style parameters through the registries, the way PLAY and ADD do, and
+  check its teardown. **Read `src/tests/README.md` (the harness cookbook) before writing one of
+  these tests**: it has a recipe for each case, what each harness doesn't model, and the
+  declaration-order rule the teardown checks depend on.
+    - `producer_harness`: `create()` a producer, `receive(*producer, n)` frames, `call()` commands.
+      Each received frame has its stamped `index`, its field and its audible `samples`; check
+      sequences with `runs(indices(frames))`, e.g. `"0..49 49*10"` (frames 0 to 49, then 49 held
+      ten more ticks), and `runs(samples(frames))`.
+    - `consumer_harness`: `create()` a consumer, `send(*consumer, n)` stamped frames with the audio
+      ramp, `close(consumer)`, then check its output with `decode_clip()`.
+    - When a harness is destroyed it fails the test if a producer or consumer is still held, takes
+      over 10 s to go, or leaves threads, open files (Linux) or frames behind. Declare producers,
+      consumers and frames after the harness, and what must outlive them (an `http_server`) before.
+    - Exact sequences are the contract: don't loosen a `runs()` check to make a test pass.
+- **Races** (`concurrency.h`): `background_loop` repeats a command on its own thread while the test
+  receives frames, as AMCP calls do; `stress_iterations()` and `CASPAR_TEST_STRESS=50` repeat it.
 - **Watchdog**: every call the harness makes into a producer is guarded. One that hangs for 30 s
   ends the test process with every thread's stack in `<output dir>/stacks.txt` (needs `gdb`).
   Missed deadlines and leaked threads also write `stacks.txt`. Read it to see where things are stuck.
@@ -136,9 +124,9 @@ cd build/tests && CASPAR_BINARY=$PWD/../staging/bin/casparcg CASPAR_MAKE_CLIP=$P
 ```
 
 - Fixtures (`e2e/conftest.py`): `server` (one 720p5000 channel), `make_server(channels=(...),
-  accelerator=..., extra_config=..., start=...)`, `make_clip(path, frames=, format=)` (stamped clips,
+accelerator=..., extra_config=..., start=...)`, `make_clip(path, frames=, format=)` (stamped clips,
   via the `caspar_make_clip` tool) and `output_dir`. `Server` (`e2e/caspar.py`) has `command("PLAY
-  1-10 clip")`, `amcp()` connections, `console()`, `signal()`, `wait_exit()` and the log.
+1-10 clip")`, `amcp()` connections, `console()`, `signal()`, `wait_exit()` and the log.
 - Every server is checked when the test ends: stopped with `KILL` if still running, then it must
   exit with code 0 (or the test's `server.expected_exit`), with no error lines in its log and no
   sanitizer report. Allow an expected error with `server.allow_errors("text")`.
