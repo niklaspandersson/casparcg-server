@@ -11,6 +11,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
@@ -310,6 +311,10 @@ void write_clip(const std::filesystem::path& path, const clip_options& options)
         }
     }
 
+    // An image file (.png, ...) holds one frame rather than a numbered sequence.
+    if (std::string(format->oformat->name) == "image2")
+        av_opt_set(format->priv_data, "update", "1", 0);
+
     check(avio_open(&format->pb, path.string().c_str(), AVIO_FLAG_WRITE), "avio_open " + path.string());
     check(avformat_write_header(format.get(), nullptr), "avformat_write_header");
 
@@ -405,7 +410,6 @@ void write_clip(const std::filesystem::path& path, const clip_options& options)
     if (audio)
         write_packets(format.get(), *audio, nullptr);
     check(av_write_trailer(format.get()), "av_write_trailer");
-
 }
 
 decoded_clip decode_clip(const std::filesystem::path& path)

@@ -2,8 +2,9 @@
 
 Recipes for testing a module's producer or consumer with the harnesses in `support/`. The
 harnesses aren't tied to a module: they take any module's `init` and create producers and
-consumers through the registries, the way AMCP does. The examples use ffmpeg because it has the
-tests; each recipe names the test it comes from, so check that file when in doubt.
+consumers through the registries, the way AMCP does. The recipes use ffmpeg's tests, the fullest
+set; `modules/image/tests/` shows the same harnesses on a still-image producer and a consumer that
+writes a PNG. Each recipe names the test it comes from, so check that file when in doubt.
 
 Which tool for what:
 
@@ -53,8 +54,9 @@ TEST_F(ffmpeg_producer, seek_command_jumps_to_the_frame)
 ```
 
 - `make_clip()` writes a clip whose frames carry their index and whose audio is a sample-number
-  ramp. For another module, add a helper next to it in `test_media.h` that stamps that module's
-  input the same way, so `read_index()` and `ramp_samples()` work on its frames.
+  ramp. With an image extension it writes a stamped still (see `make_still()` in the image tests).
+  For a module whose input it can't write, add a helper next to it in `test_media.h` that stamps
+  that input the same way, so `read_index()` and `ramp_samples()` work on its frames.
 - In interlaced formats every field is its own tick: a 1080i clip's frames each arrive twice.
 - `harness.underflows()` counts ticks that got no frame.
 

@@ -29,7 +29,9 @@ struct clip_options
     std::string  codec        = "ffv1"; // any FFmpeg encoder name, e.g. "mpeg4", "libx264", "prores_ks"
     std::string  pixel_format = "yuv420p";
     std::string  extension    = "mov"; // picks the container. MKV rounds timestamps to whole ms,
-                                       // so audio isn't sample-accurate after a seek
+                                       // so audio isn't sample-accurate after a seek. An image
+                                       // extension writes a still: .frames = 1, a matching codec
+                                       // ("png") and .audio = false
     bool        audio          = true;
     int         audio_channels = 2;
     std::string audio_codec    = "pcm_s32le";

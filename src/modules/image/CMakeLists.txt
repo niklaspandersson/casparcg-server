@@ -42,3 +42,7 @@ target_link_libraries(image PRIVATE
 	ffmpeg
 )
 
+
+if (BUILD_TESTING)
+	add_subdirectory(tests)
+endif ()
